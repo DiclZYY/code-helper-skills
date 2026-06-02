@@ -1,4 +1,4 @@
-﻿---
+---
 name: spa-native-app-framework
 description: >-
   Designs and implements SPA shells that mimic native mobile apps: dual-layer
