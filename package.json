@@ -1,0 +1,13 @@
+﻿{
+  "name": "code-helper",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent skills collection for code assistance",
+  "files": ["skills", "README.md", "LICENSE"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DiclZYY/code-helper.git"
+  },
+  "keywords": ["agent-skills", "cursor", "claude", "vue", "spa"],
+  "license": "MIT"
+}
