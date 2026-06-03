@@ -1,4 +1,4 @@
-# code-helper
+# code-helper-skills
 
 面向 AI 编程助手的 **Agent Skills** 合集，遵循 [Agent Skills 规范](https://agentskills.io/specification) 与 [skills-npm 目录约定](https://github.com/antfu/skills-npm/blob/main/PROPOSAL.md)（`skills/<skill-name>/SKILL.md`）。
 
