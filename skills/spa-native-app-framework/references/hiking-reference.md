@@ -2,6 +2,13 @@
 
 本文件为 [SKILL.md](../SKILL.md) 的补充。实现 hiking 或类似项目时查阅。
 
+## 通用规范映射（优先读通用文档）
+
+| 通用文档 | hiking 对应文件 |
+|----------|----------------|
+| [transition-animation.md](transition-animation.md) | `src/styles/page_animation.scss` ≈ [page-transition.template.scss](../assets/page-transition.template.scss) |
+| [scroll-restore-and-keepalive.md](scroll-restore-and-keepalive.md) | `src/utils/mixin.js`（globalMixin + tabPullList）、`src/utils/router-guard.js`、`src/store/modules/router.js` |
+
 ## 文件索引
 
 | 文件 | 职责 |
@@ -12,9 +19,9 @@
 | `src/store/modules/app.js` | `pageTransition`、`firstTransition` |
 | `src/store/modules/router.js` | 动态 `cached` 数组 |
 | `src/store/getters.js` | `pageTransition`、`cachedRoutes` |
-| `src/styles/page_animation.scss` | `slide-left` / `slide-right` |
+| `src/styles/page_animation.scss` | `slide-left` / `slide-right`（规范源） |
 | `src/styles/my-mint.scss` | `fade` 过渡 |
-| `src/utils/mixin.js` | `goBack()` + `setFirstTransion('slide-left')` |
+| `src/utils/mixin.js` | `goBack()`、`globalMixin` 滚动恢复、`tabPullList` |
 
 ## Legacy 命名 → 语义化命名
 
@@ -118,10 +125,18 @@ React 等价：`ProtectedRoute` 或 React Router 6 `loader` 内检查 session。
 
 ## SCSS 转场要点
 
-- `slide-right-enter`：自右 `translate3d(100%,0,0)`，`slideInRight` 0.5s
-- `slide-right-leave`：`slideOutLeft` 0.5s
-- `slide-left`：与返回方向相反
-- `fade`：opacity 0.5s（my-mint.scss）
+详见 [transition-animation.md](transition-animation.md)。hiking 源文件：`src/styles/page_animation.scss`。
+
+## Example: LineList → LinesDetails
+
+| 步骤 | 行为 |
+|------|------|
+| 进入详情 | `router-link` → `/linesDetails`；guard `slide-right`；`keepRouteAlive('LineList')` |
+| 列表状态 | `LineList` 在 `routerName` 默认缓存；`tabs[].data`、`activeIndex` 由 keep-alive 保留 |
+| 滚动 | `tabPullList` 设 `ccmxScrollContainer: '.bg-common.PBottom-none .bar_content'`；离开写 `meta.scrollTop` |
+| 返回 | `CcHeader` → `goBack()` → `slide-left` → `activated` 恢复滚动 |
+
+组件 `name: 'LineList'` 必须与路由 `name: 'LineList'` 一致。
 
 ## hiking 特有（可选，非框架必需）
 

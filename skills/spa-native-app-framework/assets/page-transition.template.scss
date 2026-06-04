@@ -1,0 +1,81 @@
+// Stack overlay page transitions — canonical template for spa-native-app-framework.
+// Bind via: <transition :name="routeTransitionName"> where name is slide-left | slide-right.
+// Import once in app entry (e.g. main.js). Duration: 0.5s. Use translate3d for GPU.
+
+@keyframes slideInLeft {
+  from {
+    -webkit-transform: translate3d(-100%, 0, 0);
+    transform: translate3d(-100%, 0, 0);
+    visibility: visible;
+  }
+  to {
+    -webkit-transform: translate3d(0, 0, 0);
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.slide-left-enter-active {
+  animation: slideInLeft 0.5s;
+}
+
+.slide-left-enter {
+  opacity: 0;
+  transform: translate3d(-100%, 0, 0);
+}
+
+.slide-left-leave-active {
+  animation: slideOutRight 0.5s;
+}
+
+@keyframes slideOutRight {
+  from {
+    -webkit-transform: translate3d(0, 0, 0);
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    visibility: hidden;
+    -webkit-transform: translate3d(100%, 0, 0);
+    transform: translate3d(100%, 0, 0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    -webkit-transform: translate3d(100%, 0, 0);
+    transform: translate3d(100%, 0, 0);
+    visibility: visible;
+  }
+  to {
+    -webkit-transform: translate3d(0, 0, 0);
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.slide-right-enter {
+  opacity: 0;
+  transform: translate3d(100%, 0, 0);
+}
+
+.slide-right-enter-active {
+  animation: slideInRight 0.5s;
+}
+
+.slide-right-leave-active {
+  animation: slideOutLeft 0.5s;
+}
+
+@keyframes slideOutLeft {
+  from {
+    -webkit-transform: translate3d(0, 0, 0);
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    visibility: hidden;
+    -webkit-transform: translate3d(-100%, 0, 0);
+    transform: translate3d(-100%, 0, 0);
+  }
+}
+
+// Optional fade (e.g. full-screen map exit) — separate from slide stack:
+// .fade-enter-active, .fade-leave-active { transition: opacity 0.5s; }
+// .fade-enter, .fade-leave-active { opacity: 0; }

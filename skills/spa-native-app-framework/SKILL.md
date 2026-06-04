@@ -1,18 +1,19 @@
 ---
 name: spa-native-app-framework
 description: >-
-  Designs and implements SPA shells that mimic native mobile apps: dual-layer
-  (main tab shell + routed stack overlay), push/pop transitions (slide-left vs
-  slide-right semantics), keep-alive cache, route tables with auth meta, and
-  navigation guards. Vue2/Vue3 and React mappings. Use for Cordova/H5 hybrids,
-  bottom tabs, stack navigation, login-gated routes, or porting native app UX.
+  Designs SPA shells mimicking native apps: tab shell + stack overlay, stack
+  transition CSS (slide-left/right per page_animation spec), scroll restore on
+  pop, dynamic keep-alive when pushing A to B. Route guards, auth meta.
+  Vue2/Vue3 and React. Use for mobile-like SPA, list-detail navigation, Cordova/H5.
 ---
 
 # SPA Native App Framework
 
 框架无关的「Web SPA 模拟原生 App」整体设计。Vue2 为参考实现；**Vue3** 见 [Vue3 兼容性](#vue3-兼容性)；React 见各节的 **React 映射**。
 
-详细 hiking 对照见 [references/hiking-reference.md](references/hiking-reference.md)。
+- 通用机制详解：[references/transition-animation.md](references/transition-animation.md)、[references/scroll-restore-and-keepalive.md](references/scroll-restore-and-keepalive.md)
+- hiking 样例对照：[references/hiking-reference.md](references/hiking-reference.md)
+- 可复制 SCSS：[assets/page-transition.template.scss](assets/page-transition.template.scss)
 
 ## When to use
 
@@ -265,81 +266,59 @@ function openStackPage(path) {
 
 ### 6. 转场 CSS
 
-提供 `slide-right`（压栈）、`slide-left`（回到主页）、`fade`（特殊页）。使用 `translate3d` + 约 0.5s。见 [返回主页时的动画区别](#返回主页时的动画区别) 与 reference 中 SCSS。
+**必须** 引入 [assets/page-transition.template.scss](assets/page-transition.template.scss)（或等效实现），类名/时长/translate 与 [references/transition-animation.md](references/transition-animation.md) 一致。禁止自造 transition 名或改 enter/leave 方向。
 
-## 返回主页时的动画区别
+## 子栈导航三大机制（通用）
 
-「回到主页」指路由目标为 `AppShell`（`path === '/'`），叠层隐藏、MainTabLayer 重新可交互。动画名**不是**随意取的，而是与原生「压栈 / 出栈」方向绑定。
+子页 A↔B 除壳层与守卫外，框架级能力如下（实现任一 SPA 栈导航时 **三项齐备**）。
 
-### 动画名与视觉语义（勿混淆）
+### 机制一：转场动画（`routeTransitionName` + SCSS）
 
-| `routeTransitionName` | 用户感知 | 进入页（enter） | 离开页（leave） | 典型场景 |
-|----------------------|----------|----------------|-----------------|----------|
-| **`slide-right`** | 压栈、前进 | 自**右**滑入 | 向**左**滑出 | AppShell → 子页；子页 → 子页 |
-| **`slide-left`** | 出栈、回到 Tab | 自**左**滑入（露出底层主页） | 向**右**滑出 | 子页 → AppShell（常规返回） |
-| **`fade`** | 渐隐切换 | 透明度 | 透明度 | 如 Map → AppShell 且已设 `override` 时的特例 |
+| 导航 | `routeTransitionName` | 用户感知 |
+|------|----------------------|----------|
+| 压栈 A→B | `slide-right` | 新页自右入，旧页向左出 |
+| 出栈 B→A（含详情→列表、→AppShell） | `slide-left` | 底下页自左入，当前页向右出 |
 
-命名约定：**`slide-left` = 回到主页**，**`slide-right` = 打开或前进子页**。CSS 类前缀与方向一致（`slide-left-enter` 使用 `slideInLeft`，自左侧 -100% 进入）。
+- 守卫写入 store → 壳层 `<transition :name="routeTransitionName">`
+- **并行 enter+leave**（默认无 `mode="out-in"`）→ 约 0.5s 内两页同屏横向滑动，像原生栈
+- 返回务必 `goBack()`：`setOverrideTransition('slide-left')` 再 `router.go(-1)`，否则 B→A 可能误用 `slide-right`
 
-### 回到主页的两条路径（动画名必须一致）
+详表、keyframes、双页并列原理：[references/transition-animation.md](references/transition-animation.md)
 
-两条路径都应让壳层最终使用 **`slide-left`**（除非走下面的 `fade` 特例），否则会出现「返回却像前进」的错位。
+### 机制二：动态 keep-alive（A→B 缓存 A）
 
-```text
-路径 A — 守卫自动计算（浏览器后退、router.push('/') 等）
-  条件: to.name === 'AppShell' && from.name !== 'Map'（且无 override）
-  → routeTransitionName = 'slide-left'
+1. `defaultCachedRouteNames` 初始化 `cachedRouteNames`
+2. 压栈且 `from.name !== 'AppShell'` → `addCachedRouteName(from.name)`
+3. `<keep-alive :include="cachedRouteNames">`；组件 `name` === 路由 `name`
+4. 返回时 A 走 `activated`，不重建列表 data / Tab
 
-路径 B — 业务主动返回（头部返回钮、goBack）
-  1. setOverrideTransition('slide-left')   // 必须先于导航
-  2. router.go(-1) 或 router.push('/')
-  → 守卫读到 override，采用 slide-left，随后 clearOverrideTransition()
-```
+详流程：[references/scroll-restore-and-keepalive.md](references/scroll-restore-and-keepalive.md#1-动态-keep-aliveab-时缓存-a)
 
-**与压栈对比：**
+### 机制三：滚动位置恢复（B→A）
 
-```text
-压栈:  from AppShell → 子页     → slide-right（守卫默认）
-       子页 A → 子页 B          → slide-right
-返回:  子页 → AppShell          → slide-left（路径 A 或 B）
-```
+1. **离开 A**：`beforeRouteLeave` 将 `scrollContainerSelector` 对应元素的 `scrollTop` 写入 `from.meta.scrollTop`（列表页常非默认选择器）
+2. **回到 A**：`activated` 中在 `cachedRouteNames` 含 A 且非刷新时写回 `scrollTop`，然后清零 meta
+3. 与 keep-alive 正交：数据靠实例缓存，滚动靠 meta
 
-### 特例：Map → AppShell 使用 `fade`
+详流程与 mixin 骨架：[references/scroll-restore-and-keepalive.md](references/scroll-restore-and-keepalive.md#2-滚动位置恢复ba)
 
-当 **已存在** `overrideTransitionName`（通常来自 `goBack()`）且 `from.name === 'Map'`、`to.name === 'AppShell'` 时，hiking 将动画改为 **`fade`**，而**不是** `slide-left`，用于地图页退出时渐隐，避免与全屏地图 slide 冲突。实现时在 override 分支单独判断；其它子页返回仍用 `slide-left`。
+### 守卫决策简表
 
-### 守卫侧连带行为（仅 `slide-left` 回到主页时）
+| from | to | 默认 `routeTransitionName` |
+|------|-----|---------------------------|
+| `AppShell` | 子页 | `slide-right` |
+| 子页 | 子页 | `slide-right` |
+| 子页 | `AppShell` | `slide-left` |
+| 任意 | 任意 | `overrideTransitionName`（`goBack` 用 `slide-left`） |
 
-| `routeTransitionName` | 对 MainTabLayer 的影响 |
-|----------------------|-------------------------|
-| `slide-right` 且 from 为 AppShell | 约 500ms 后 `isMainTabLayerHidden = true` |
-| **`slide-left` 且 to 为 AppShell** | **立即** 去掉 hidden，恢复 Tab 层 |
-| `slide-right` 且 from 为子页 | `addCachedRouteName(from.name)` |
+压栈：`slide-right` + from 子页 → `addCachedRouteName(from.name)`；+ from AppShell → 延迟隐藏 MainTabLayer。
 
-### 实现检查
+## Keep-alive contract（摘要）
 
-- [ ] 返回按钮走 `goBack()`，不要裸 `router.go(-1)`（否则缺少 override，可能与守卫自动规则不一致）
-- [ ] 文档/注释中写清：`slide-left` ≠ 「向左滑动屏幕」，而是「主页从左侧入屏的出栈动画」
-- [ ] 子页叠层 `<transition :name="routeTransitionName">` 在回到 `/` 时收到的名称为 `slide-left`
-
-## Transition rules（守卫决策简表）
-
-| from | to | 默认 `routeTransitionName` | 备注 |
-|------|-----|---------------------------|------|
-| 子页（非 Map） | `AppShell` | **`slide-left`** | 路径 A：回到 Tab |
-| `AppShell` | 子页 | **`slide-right`** | 压栈 |
-| 子页 | 子页 | **`slide-right`** | 前进 |
-| 任意 | 任意 | **`overrideTransitionName`** | 路径 B：`goBack()` 先设 **`slide-left`** |
-| `Map` | `AppShell` | **`fade`** | 仅当已有 override 时（路径 B 从地图返回） |
-
-压栈后约 500ms 为 `.main-tab-layer` 加 `--hidden`，避免触摸穿透。
-
-## Keep-alive contract
-
-1. `<keep-alive :include="cachedRouteNames">` 的项为**组件 name 字符串**
-2. 组件 `export default { name: 'OrderList' }` 必须与路由 `name: 'OrderList'` 一致
-3. 前进离开页时 `addCachedRouteName(from.name)`；默认列表在 `defaultCachedRouteNames` 初始化
-4. **React：** 无 keep-alive；用 React Router 的持久化布局、`useOutlet` + 自管 cache Map，或 `react-activation`
+1. `include` 项为路由 **name** 字符串；组件 `name` 必须一致
+2. **A→B 压栈** 时动态 `addCachedRouteName(from.name)`（见机制二）
+3. `defaultCachedRouteNames` 不可被 `removeCachedRouteName` 移除
+4. React：`react-activation` 或自管 cache Map
 
 ## Auth route design
 
@@ -482,4 +461,7 @@ defineOptions({ name: 'OrderList' })
 
 ## Additional resources
 
-- [references/hiking-reference.md](references/hiking-reference.md) — hiking 对照、返回动画决策、Vue3 细节、legacy 命名
+- [references/transition-animation.md](references/transition-animation.md) — 转场 CSS 规范、双页滑动原理、守卫设定
+- [references/scroll-restore-and-keepalive.md](references/scroll-restore-and-keepalive.md) — 动态 keep-alive、滚动恢复、检查清单
+- [assets/page-transition.template.scss](assets/page-transition.template.scss) — 可直接复制的 SCSS
+- [references/hiking-reference.md](references/hiking-reference.md) — hiking 样例、legacy 命名、LineList 案例
