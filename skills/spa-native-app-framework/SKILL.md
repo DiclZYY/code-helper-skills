@@ -215,7 +215,7 @@ export default {
 | **外层** | Tab 根 `AppShell` ↔ 进入/离开子路由叠层 | 动画作用在 `.stack-overlay-layer` 整盒；`v-show`（勿用 `v-if`）在回到 `/` 时仅隐藏叠层，保留 DOM，配合 `keep-alive` 避免高频子页每次从 Tab 进入都整栈重载 |
 | **内层** | 子路由 ↔ 子路由（列表→详情等） | 动画作用在 `router-view` 页面组件；并行 enter/leave 形成栈式横滑 |
 
-**页面根 `position: absolute`（转场必备）：** 内层动画期间会短暂存在两个路由页面根 DOM，须在同一叠层坐标系内横滑（非文档流叠摞）。子路由顶层包裹（如 `.bg-html` / `.page-root`）在 `.stack-overlay-layer` 下设为 `absolute`。见 [assets/stack-page-layout.template.scss](assets/stack-page-layout.template.scss)、[references/transition-animation.md](references/transition-animation.md#2-页面根节点必须-position-absolute关键)。
+**动画期间路由根绝对定位（转场必备）：** 内层并行 enter/leave 时两棵页面根须同坐标系横滑。推荐在转场 SCSS 为 `{name}-enter-active` / `{name}-leave-active` 设 `position: absolute !important`（已写入 [page-transition.template.scss](assets/page-transition.template.scss)），对任意 `router-view` 根生效；常态布局可另见 [stack-page-layout.template.scss](assets/stack-page-layout.template.scss)。
 
 **叠层滚动隔离：** `overflow: hidden` + `overscroll-behavior: contain`（iOS 支持有限，见 Optional extensions）。
 
@@ -291,7 +291,7 @@ function openStackPage(path) {
 | 出栈 B→A（含详情→列表、→AppShell） | `slide-left` | 底下页自左入，当前页向右出 |
 
 - 守卫写入 store → 壳层双层 `<transition :name="routeTransitionName">`（外：壳↔叠层，内：子路由切换）
-- **内层**并行 enter+leave + **页面根 absolute** → 约 0.5s 两页同坐标系横滑
+- **内层**并行 enter+leave + **转场 class 上 `position:absolute !important`** → 约 0.5s 两页同坐标系横滑
 - 返回务必 `goBack()`：`setOverrideTransition('slide-left')` 再 `router.go(-1)`，否则 B→A 可能误用 `slide-right`
 
 详表、keyframes、双页并列原理：[references/transition-animation.md](references/transition-animation.md)

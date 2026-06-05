@@ -34,36 +34,54 @@
 
 外层用 `v-show` 的原因：从 Tab 再次进入同一子路由时，叠层容器与已缓存子页可快速恢复；`v-if` 会拆掉整棵子栈 DOM，与「高频子页」体验相悖。
 
-## 2. 页面根节点必须 `position: absolute`（关键）
+## 2. 动画期间路由根节点必须脱离文档流（关键）
 
 并行 enter/leave 时，**约 0.5s 内 DOM 上同时存在两个路由页面根节点**。若二者为默认文档流（`position: static`），会上下叠摞，**无法**形成横向「两页并列滑动」。
 
-**通用规则：** 叠层内每个子路由页面的**顶层包裹**（如 `.page-root`、`.bg-html`）在 `.stack-overlay-layer` 下必须为：
+### 2.1 推荐（更通用）：在转场 class 上设 `absolute`
+
+内层 `<transition :name="routeTransitionName">`（包 `router-view` 的那层）在动画进行时会为路由组件根节点挂上 `{name}-enter-active` / `{name}-leave-active`。**直接在转场 SCSS 中统一绝对定位**，不依赖每个页面是否写了 `.bg-html`：
+
+```scss
+// 已写入 page-transition.template.scss
+.slide-left-enter-active,
+.slide-left-leave-active,
+.slide-right-enter-active,
+.slide-right-leave-active {
+  position: absolute !important;
+  top: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+  min-height: 100%;
+}
+```
+
+- 作用于 **router-view 输出的组件根元素**（transition 的直接动画目标）
+- `!important` 用于压过页面内其它 `position` 定义，**仅在动画类存续期间**生效
+- 动画结束后 class 移除，布局回到页面自身样式
+
+**父级前提：** `.stack-overlay-layer` 为 `position:absolute; height:100%; overflow:hidden`，作为绝对定位 containing block。
+
+### 2.2 补充（非动画态布局 / 滚动）
+
+转场 class 只覆盖约 0.5s；页面**常态**仍建议顶层包裹绝对定位或满高，以统一滚动与叠层布局（尤其 Tab 内 `.bg-common` 为 `relative`、叠层内为 `absolute` 的区分）：
 
 ```scss
 .stack-overlay-layer {
-  .page-root { /* 或项目约定的 .bg-html */
+  .page-root, .bg-html {
     position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0; /* 或 height: 100% */
-    z-index: 1;
+    top: 0; left: 0; right: 0; bottom: 0;
     overflow-y: auto;
     transform: translate3d(0, 0, 0);
   }
 }
 ```
 
-参考实现（hiking）：`src/styles/base.scss` 中 `.sub-page .bg-html`、`.sub-page .bg-common` 的 `position: absolute`。
+模板：[../assets/stack-page-layout.template.scss](../assets/stack-page-layout.template.scss)  
+参考（hiking）：`src/styles/base.scss` `.sub-page .bg-html` / `.bg-common`
 
-模板：[../assets/stack-page-layout.template.scss](../assets/stack-page-layout.template.scss)
-
-与转场配合：
-
-- **叠层容器** `.stack-overlay-layer`：`position:absolute; overflow:hidden`（裁切视口）
-- **页面根** `absolute`：使 leave/enter 两棵根节点**占同一叠层坐标系**，`translate3d` 横向滑动才正确
-- 动画结束后 leave 根 DOM 移除，仅余当前路由一个根节点
+**二者关系：** §2.1 保证**任意**子路由在切换动画中可并列横滑；§2.2 保证静止时滚动区域与壳层一致。可只用 §2.1，但生产项目常两者并存。
 
 ## 3. 类名与 keyframes 契约（严格）
 

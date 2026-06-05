@@ -1,6 +1,8 @@
-// Stack overlay: page root must be position:absolute during parallel enter/leave transitions.
-// Without this, two route roots stack in document flow and break horizontal slide.
-// Scope under .stack-overlay-layer (or .sub-page). Adjust class names to your page shell.
+// Stack overlay: page root layout when NOT animating (scroll, full-height).
+// During enter/leave, prefer transition classes in page-transition.template.scss:
+//   .slide-*-enter-active / .slide-*-leave-active { position: absolute !important; }
+// That applies to any router-view root without per-page setup.
+// This file supplements steady-state layout under .stack-overlay-layer (or .sub-page).
 
 .stack-overlay-layer {
   .page-root,           // generic: top-level wrapper in each stack route component

@@ -6,7 +6,7 @@
 
 | 通用文档 | hiking 对应文件 |
 |----------|----------------|
-| [transition-animation.md](transition-animation.md) | `src/styles/page_animation.scss` ≈ [page-transition.template.scss](../assets/page-transition.template.scss)；`src/styles/base.scss` `.sub-page .bg-html` ≈ [stack-page-layout.template.scss](../assets/stack-page-layout.template.scss) |
+| [transition-animation.md](transition-animation.md) | `page_animation.scss` ≈ [page-transition.template.scss](../assets/page-transition.template.scss)（含 enter/leave-active `absolute !important`）；`base.scss` `.sub-page .bg-html` ≈ [stack-page-layout.template.scss](../assets/stack-page-layout.template.scss)（常态布局补充） |
 | [scroll-restore-and-keepalive.md](scroll-restore-and-keepalive.md) | `src/utils/mixin.js`（globalMixin + tabPullList）、`src/utils/router-guard.js`、`src/store/modules/router.js` |
 
 ## 文件索引
@@ -108,7 +108,8 @@ React 等价：`ProtectedRoute` 或 React Router 6 `loader` 内检查 session。
   overscroll-behavior: contain
   外层 transition + v-show     ← AppShell↔叠层；v-show 保留叠层 DOM，利于高频子页
   内层 transition → keep-alive → router-view   ← 子路由 A↔B
-  .sub-page .bg-html / .bg-common → position absolute（并行动画时两页根同坐标系横滑）
+  内层 transition 的 *-enter-active / *-leave-active 宜设 absolute !important（通用，见 page-transition.template.scss）
+  .sub-page .bg-html / .bg-common → position absolute（hiking 常态滚动布局补充）
 ```
 
 ## keep-alive 默认列表（hiking router.js L12）
@@ -123,7 +124,8 @@ React 等价：`ProtectedRoute` 或 React Router 6 `loader` 内检查 session。
 |--------|----------|------|
 | `#app` / `#app-shell` | `overflow: hidden` | 整页不随内容撑开滚动 |
 | `.main-page` / `.main-tab-layer` | `overflow: hidden` | Tab 层不溢出 |
-| `.sub-page` / `.stack-overlay-layer` | `overflow: hidden` + **`overscroll-behavior: contain`** | 子页滚到顶/底时不链式带动底层（iOS Safari 支持有限，见 SKILL Optional extensions） |
+| `.sub-page` / `.stack-overlay-layer` | `overflow: hidden` + **`overscroll-behavior: contain`** | 叠层裁切视口 |
+| `.sub-page .bg-html` / `.bg-common` | **`position: absolute`** + `top:0` + `overflow-y:auto` | 页面根脱离文档流，转场时两页可并列横滑（`base.scss` L103-117） |
 
 ## SCSS 转场要点
 

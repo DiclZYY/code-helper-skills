@@ -1,6 +1,22 @@
 // Stack overlay page transitions — canonical template for spa-native-app-framework.
 // Bind via: <transition :name="routeTransitionName"> where name is slide-left | slide-right.
 // Import once in app entry (e.g. main.js). Duration: 0.5s. Use translate3d for GPU.
+//
+// Parent .stack-overlay-layer must be position:absolute (or relative) + height:100% + overflow:hidden.
+
+// Generic: force route component roots out of document flow during parallel enter/leave.
+// Applies to whatever router-view renders — no per-page .bg-html required for animation.
+.slide-left-enter-active,
+.slide-left-leave-active,
+.slide-right-enter-active,
+.slide-right-leave-active {
+  position: absolute !important;
+  top: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+  min-height: 100%;
+}
 
 @keyframes slideInLeft {
   from {
