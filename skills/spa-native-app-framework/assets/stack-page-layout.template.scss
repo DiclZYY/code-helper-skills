@@ -1,0 +1,29 @@
+// Stack overlay: page root must be position:absolute during parallel enter/leave transitions.
+// Without this, two route roots stack in document flow and break horizontal slide.
+// Scope under .stack-overlay-layer (or .sub-page). Adjust class names to your page shell.
+
+.stack-overlay-layer {
+  .page-root,           // generic: top-level wrapper in each stack route component
+  .bg-html {            // reference project convention
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;          // or height: 100% with parent height: 100%
+    z-index: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    transform: translate3d(0, 0, 0);
+  }
+
+  .page-body,           // generic inner content shell
+  .bg-common {          // reference project convention
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1;
+  }
+}

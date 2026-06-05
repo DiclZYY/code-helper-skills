@@ -6,7 +6,7 @@
 
 | 通用文档 | hiking 对应文件 |
 |----------|----------------|
-| [transition-animation.md](transition-animation.md) | `src/styles/page_animation.scss` ≈ [page-transition.template.scss](../assets/page-transition.template.scss) |
+| [transition-animation.md](transition-animation.md) | `src/styles/page_animation.scss` ≈ [page-transition.template.scss](../assets/page-transition.template.scss)；`src/styles/base.scss` `.sub-page .bg-html` ≈ [stack-page-layout.template.scss](../assets/stack-page-layout.template.scss) |
 | [scroll-restore-and-keepalive.md](scroll-restore-and-keepalive.md) | `src/utils/mixin.js`（globalMixin + tabPullList）、`src/utils/router-guard.js`、`src/store/modules/router.js` |
 
 ## 文件索引
@@ -105,8 +105,10 @@ React 等价：`ProtectedRoute` 或 React Router 6 `loader` 内检查 session。
 
 .sub-page / .stack-overlay-layer
   position absolute; z-index 3; overflow hidden
-  overscroll-behavior: contain   ← 阻止滚动链传到主 Tab 层（iOS 支持有限）
-  transition → keep-alive → router-view
+  overscroll-behavior: contain
+  外层 transition + v-show     ← AppShell↔叠层；v-show 保留叠层 DOM，利于高频子页
+  内层 transition → keep-alive → router-view   ← 子路由 A↔B
+  .sub-page .bg-html / .bg-common → position absolute（并行动画时两页根同坐标系横滑）
 ```
 
 ## keep-alive 默认列表（hiking router.js L12）

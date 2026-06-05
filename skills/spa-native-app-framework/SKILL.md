@@ -13,7 +13,7 @@ description: >-
 
 - 通用机制详解：[references/transition-animation.md](references/transition-animation.md)、[references/scroll-restore-and-keepalive.md](references/scroll-restore-and-keepalive.md)
 - hiking 样例对照：[references/hiking-reference.md](references/hiking-reference.md)
-- 可复制 SCSS：[assets/page-transition.template.scss](assets/page-transition.template.scss)
+- 可复制 SCSS：[assets/page-transition.template.scss](assets/page-transition.template.scss)、[assets/stack-page-layout.template.scss](assets/stack-page-layout.template.scss)
 
 ## When to use
 
@@ -160,9 +160,11 @@ Tab UI 可替换 Mint UI / Vant / 自研；结构不变。
       <mt-tabbar v-model="activatedTab">...</mt-tabbar>
     </div>
 
-    <!-- StackOverlayLayer -->
+    <!-- StackOverlayLayer — 双层 transition，职责不同（见下） -->
+    <!-- 外层：AppShell ↔ 子叠层 进出场 -->
     <transition :name="routeTransitionName">
       <div v-show="isStackOverlayVisible" class="stack-overlay-layer">
+        <!-- 内层：叠层内子路由 A↔B 切换 -->
         <transition :name="routeTransitionName">
           <keep-alive :include="cachedRouteNames">
             <router-view />
@@ -206,7 +208,16 @@ export default {
 }
 ```
 
-**叠层滚动隔离：** `overflow: hidden` 约束叠层自身不撑开外壳；`overscroll-behavior: contain` 阻止子页内滚动到边界后继续「橡皮筋」带动底层 Tab 或整页（Android Chrome / 部分桌面浏览器有效）。**iOS Safari 对该属性支持有限**，hiking 注释已标明；若子页仍有穿透，需在子页滚动容器上使用 `-webkit-overflow-scrolling: touch` 并限制滚动区域高度，或配合 `touch-action` / 阻止 `touchmove` 冒泡（见 Optional extensions）。
+**双层 transition 分工：**
+
+| 层 | 场景 | 说明 |
+|----|------|------|
+| **外层** | Tab 根 `AppShell` ↔ 进入/离开子路由叠层 | 动画作用在 `.stack-overlay-layer` 整盒；`v-show`（勿用 `v-if`）在回到 `/` 时仅隐藏叠层，保留 DOM，配合 `keep-alive` 避免高频子页每次从 Tab 进入都整栈重载 |
+| **内层** | 子路由 ↔ 子路由（列表→详情等） | 动画作用在 `router-view` 页面组件；并行 enter/leave 形成栈式横滑 |
+
+**页面根 `position: absolute`（转场必备）：** 内层动画期间会短暂存在两个路由页面根 DOM，须在同一叠层坐标系内横滑（非文档流叠摞）。子路由顶层包裹（如 `.bg-html` / `.page-root`）在 `.stack-overlay-layer` 下设为 `absolute`。见 [assets/stack-page-layout.template.scss](assets/stack-page-layout.template.scss)、[references/transition-animation.md](references/transition-animation.md#2-页面根节点必须-position-absolute关键)。
+
+**叠层滚动隔离：** `overflow: hidden` + `overscroll-behavior: contain`（iOS 支持有限，见 Optional extensions）。
 
 **React 映射：**
 
@@ -279,8 +290,8 @@ function openStackPage(path) {
 | 压栈 A→B | `slide-right` | 新页自右入，旧页向左出 |
 | 出栈 B→A（含详情→列表、→AppShell） | `slide-left` | 底下页自左入，当前页向右出 |
 
-- 守卫写入 store → 壳层 `<transition :name="routeTransitionName">`
-- **并行 enter+leave**（默认无 `mode="out-in"`）→ 约 0.5s 内两页同屏横向滑动，像原生栈
+- 守卫写入 store → 壳层双层 `<transition :name="routeTransitionName">`（外：壳↔叠层，内：子路由切换）
+- **内层**并行 enter+leave + **页面根 absolute** → 约 0.5s 两页同坐标系横滑
 - 返回务必 `goBack()`：`setOverrideTransition('slide-left')` 再 `router.go(-1)`，否则 B→A 可能误用 `slide-right`
 
 详表、keyframes、双页并列原理：[references/transition-animation.md](references/transition-animation.md)
@@ -463,5 +474,6 @@ defineOptions({ name: 'OrderList' })
 
 - [references/transition-animation.md](references/transition-animation.md) — 转场 CSS 规范、双页滑动原理、守卫设定
 - [references/scroll-restore-and-keepalive.md](references/scroll-restore-and-keepalive.md) — 动态 keep-alive、滚动恢复、检查清单
-- [assets/page-transition.template.scss](assets/page-transition.template.scss) — 可直接复制的 SCSS
+- [assets/page-transition.template.scss](assets/page-transition.template.scss) — slide keyframes
+- [assets/stack-page-layout.template.scss](assets/stack-page-layout.template.scss) — 叠层内页面根 absolute 布局
 - [references/hiking-reference.md](references/hiking-reference.md) — hiking 样例、legacy 命名、LineList 案例
