@@ -1,6 +1,6 @@
 ﻿{
   "name": "code-helper",
-  "version": "0.1.0",
+  "version": "0.1.5",
   "private": true,
   "description": "Agent skills collection for code assistance",
   "files": ["skills", "README.md", "LICENSE"],

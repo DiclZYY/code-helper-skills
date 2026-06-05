@@ -40,7 +40,7 @@ flowchart TB
   mainTabLayer --> tabState["activatedTab 本地状态 非路由"]
   mainTabLayer --> tabBar["TabBar"]
   stackOverlayLayer --> routeOutlet["Router Outlet + Transition"]
-  navGuard["Navigation Guard"] --> transitionStore["routeTransitionName"]
+  navGuard["Navigation Guard"] --> transitionStore["routeTransitionName + stackPageTransitionName"]
   transitionStore --> routeOutlet
   pushNav["navigate 子路由"] --> stackOverlayLayer
   tabNav["切换 activatedTab"] --> mainTabLayer
@@ -63,7 +63,8 @@ flowchart TB
 |------|----------|------|
 | 当前激活的 Tab id | `activatedTab` | `selected`, `tab` |
 | 子页叠层是否可见 | `isStackOverlayVisible` | 仅靠隐式路由 |
-| 路由转场 CSS 名 | `routeTransitionName` | `pageTransition` |
+| 路由转场 CSS 名（外层叠层） | `routeTransitionName` | `pageTransition` |
+| 栈内 router-view 转场名（内层） | `stackPageTransitionName` | 与外层共用同名 |
 | 一次性覆盖转场 | `overrideTransitionName` | `firstTransition` |
 | keep-alive 路由名列表 | `cachedRouteNames` | `cachedRoutes` |
 | 主 Tab 层是否隐藏 | `isMainTabLayerHidden` | `show-sub-page` 类名可保留为 CSS |
@@ -106,10 +107,10 @@ export const routes = [
 守卫顺序建议：
 
 1. **鉴权**：`requiresLogin` 且无 token → 弹窗/跳转登录，`return` 阻断
-2. **转场名**：计算 `routeTransitionName`（见下表）；`overrideTransitionName` 优先且用后清空
+2. **转场名**：计算 `routeTransitionName`（外层）与 `stackPageTransitionName`（内层，见 [双层 transition 分工](#双层-transition-分工)）；`overrideTransitionName` 优先且用后清空
 3. **叠层 DOM**：前进时延迟隐藏 MainTabLayer；返回 AppShell 时恢复
 4. **动态缓存**：`slide-right` 且 from 非 AppShell → `addCachedRouteName(from.name)`
-5. `next()` 前将 `routeTransitionName` 写入全局状态供壳层 `<transition>` 使用
+5. `next()` / `return true` 前将两个转场名写入全局状态供壳层 `<transition>` 使用
 
 ```javascript
 // Vue Router 2 — 鉴权片段（语义化 meta）
@@ -137,8 +138,15 @@ router.beforeEach(async (to, from, next) => {
   }
 
   store.commit('SET_ROUTE_TRANSITION', routeTransitionName)
+  store.commit('SET_STACK_PAGE_TRANSITION', resolveStackPageTransitionName(routeTransitionName, to, from))
   next()
 })
+
+function resolveStackPageTransitionName(routeTransitionName, to, from) {
+  if (from.name === 'AppShell') return ''   // 压栈：内层无动画，避免与外层双重 slide
+  if (to.name === 'AppShell') return 'fade' // 回主页：内层淡出，避免内容随外层 slide 瞬间消失
+  return routeTransitionName                 // 栈内 A↔B：内层 slide
+}
 ```
 
 **React 映射：** `react-router` v6 用 `<BrowserRouter>` + 自定义 `useNavigationGuard` 或在 layout 内 `useEffect` 监听 `location`；鉴权用 `<ProtectedRoute requiresLogin />` 或 loader 内 `redirect('/login')`。转场用 `framer-motion` 的 `AnimatePresence` + 全局 context 存 `routeTransitionName`。
@@ -160,12 +168,12 @@ Tab UI 可替换 Mint UI / Vant / 自研；结构不变。
       <mt-tabbar v-model="activatedTab">...</mt-tabbar>
     </div>
 
-    <!-- StackOverlayLayer — 双层 transition，职责不同（见下） -->
-    <!-- 外层：AppShell ↔ 子叠层 进出场 -->
+    <!-- StackOverlayLayer — 双层 transition，绑定不同 name（见下） -->
+    <!-- 外层 routeTransitionName：AppShell ↔ 子叠层 进出场 -->
     <transition :name="routeTransitionName">
       <div v-show="isStackOverlayVisible" class="stack-overlay-layer">
-        <!-- 内层：叠层内子路由 A↔B 切换 -->
-        <transition :name="routeTransitionName">
+        <!-- 内层 stackPageTransitionName：叠层内子路由 A↔B；与 AppShell 交界时无 slide / fade -->
+        <transition :name="stackPageTransitionName">
           <keep-alive :include="cachedRouteNames">
             <router-view />
           </keep-alive>
@@ -186,7 +194,7 @@ export default {
     }
   },
   computed: {
-    ...mapGetters(['routeTransitionName', 'cachedRouteNames']),
+    ...mapGetters(['routeTransitionName', 'stackPageTransitionName', 'cachedRouteNames']),
     isStackOverlayVisible() {
       return this.$route.path !== '/'
     }
@@ -210,10 +218,33 @@ export default {
 
 **双层 transition 分工：**
 
-| 层 | 场景 | 说明 |
-|----|------|------|
-| **外层** | Tab 根 `AppShell` ↔ 进入/离开子路由叠层 | 动画作用在 `.stack-overlay-layer` 整盒；`v-show`（勿用 `v-if`）在回到 `/` 时仅隐藏叠层，保留 DOM，配合 `keep-alive` 避免高频子页每次从 Tab 进入都整栈重载 |
-| **内层** | 子路由 ↔ 子路由（列表→详情等） | 动画作用在 `router-view` 页面组件；并行 enter/leave 形成栈式横滑 |
+两层 `<transition>` **职责不同，且应绑定不同的 `name`**。若内外层共用同一 `routeTransitionName`，会在 AppShell ↔ 子页边界出现 **双重 slide**（压栈时叠层与页面各滑一次），或回主页时 **内层内容瞬间消失**（外层 slide 时内层无 leave 过渡）。
+
+| 层 | 绑定 | 触发场景 | 动画对象 |
+|----|------|----------|----------|
+| **外层** | `routeTransitionName` | `AppShell`（`/`）↔ 任意子路由 | 整个 `.stack-overlay-layer` 容器 slide 进出场 |
+| **内层** | `stackPageTransitionName` | 叠层 **内部** 子路由切换 | `router-view` 页面组件根 |
+
+**内层 `stackPageTransitionName` 决策（守卫内计算，写入 store）：**
+
+| from | to | `routeTransitionName`（外层） | `stackPageTransitionName`（内层） | 用户感知 |
+|------|-----|------------------------------|-----------------------------------|----------|
+| `AppShell` | 子页 | `slide-right` | `''`（空，无动画） | 仅叠层自右滑入，页面内容随容器同步出现 |
+| 子页 | `AppShell` | `slide-left` | `fade` | 叠层向右滑出；内层子页 **opacity 淡出**，避免内容硬切 |
+| 子页 | 子页 | `slide-right` / `slide-left` | 同外层 slide 名 | 栈内两页并行横滑 |
+| 任意 | 任意 | `overrideTransitionName` | 按上表规则派生 | `goBack()` 仍先设 `slide-left` |
+
+```javascript
+function resolveStackPageTransitionName(routeTransitionName, to, from) {
+  if (from.name === 'AppShell') return ''
+  if (to.name === 'AppShell') return 'fade'
+  return routeTransitionName
+}
+```
+
+Vue 3 中 `name` 为空字符串时 Transition **不应用**命名 class（等价于无动画）。`fade` 时长与 slide 一致（0.5s），与外层并行。
+
+外层配合 **`v-show`**（勿用 `v-if`）：回到 `/` 时仅隐藏叠层，保留 DOM，配合 `keep-alive` 避免高频子页每次从 Tab 进入都整栈重载。
 
 **动画期间路由根绝对定位（转场必备）：** 内层并行 enter/leave 时两棵页面根须同坐标系横滑。推荐在转场 SCSS 为 `{name}-enter-active` / `{name}-leave-active` 设 `position: absolute !important`（已写入 [page-transition.template.scss](assets/page-transition.template.scss)），对任意 `router-view` 根生效；常态布局可另见 [stack-page-layout.template.scss](assets/stack-page-layout.template.scss)。
 
@@ -251,10 +282,11 @@ return (
 // store/modules/navigation.js
 const state = {
   routeTransitionName: 'fade',
+  stackPageTransitionName: '',
   overrideTransitionName: null,
   cachedRouteNames: [...defaultCachedRouteNames]
 }
-// actions: setRouteTransition, setOverrideTransition(clear after use)
+// actions: setRouteTransition, setStackPageTransitionName, setOverrideTransition(clear after use)
 // actions: addCachedRouteName, removeCachedRouteName
 ```
 
@@ -283,15 +315,17 @@ function openStackPage(path) {
 
 子页 A↔B 除壳层与守卫外，框架级能力如下（实现任一 SPA 栈导航时 **三项齐备**）。
 
-### 机制一：转场动画（`routeTransitionName` + SCSS）
+### 机制一：转场动画（`routeTransitionName` + `stackPageTransitionName` + SCSS）
 
-| 导航 | `routeTransitionName` | 用户感知 |
-|------|----------------------|----------|
-| 压栈 A→B | `slide-right` | 新页自右入，旧页向左出 |
-| 出栈 B→A（含详情→列表、→AppShell） | `slide-left` | 底下页自左入，当前页向右出 |
+| 导航 | 外层 `routeTransitionName` | 内层 `stackPageTransitionName` | 用户感知 |
+|------|---------------------------|-------------------------------|----------|
+| 压栈 AppShell→B | `slide-right` | `''` | 叠层自右入；内层无二次 slide |
+| 出栈 B→AppShell | `slide-left` | `fade` | 叠层向右出；子页淡出 |
+| 栈内 A→B | `slide-right` | `slide-right` | 两页并行横滑 |
+| 栈内 B→A | `slide-left` | `slide-left` | 两页并行横滑 |
 
-- 守卫写入 store → 壳层双层 `<transition :name="routeTransitionName">`（外：壳↔叠层，内：子路由切换）
-- **内层**并行 enter+leave + **转场 class 上 `position:absolute !important`** → 约 0.5s 两页同坐标系横滑
+- 守卫写入 store → 壳层 **外层** `:name="routeTransitionName"`、**内层** `:name="stackPageTransitionName"`
+- **内层**栈间切换：并行 enter+leave + 转场 class 上 `position:absolute !important` → 约 0.5s 两页同坐标系横滑
 - 返回务必 `goBack()`：`setOverrideTransition('slide-left')` 再 `router.go(-1)`，否则 B→A 可能误用 `slide-right`
 
 详表、keyframes、双页并列原理：[references/transition-animation.md](references/transition-animation.md)
@@ -315,12 +349,12 @@ function openStackPage(path) {
 
 ### 守卫决策简表
 
-| from | to | 默认 `routeTransitionName` |
-|------|-----|---------------------------|
-| `AppShell` | 子页 | `slide-right` |
-| 子页 | 子页 | `slide-right` |
-| 子页 | `AppShell` | `slide-left` |
-| 任意 | 任意 | `overrideTransitionName`（`goBack` 用 `slide-left`） |
+| from | to | `routeTransitionName`（外层） | `stackPageTransitionName`（内层） |
+|------|-----|------------------------------|-----------------------------------|
+| `AppShell` | 子页 | `slide-right` | `''` |
+| 子页 | 子页 | `slide-right`（压栈默认） | `slide-right` |
+| 子页 | `AppShell` | `slide-left` | `fade` |
+| 任意 | 任意 | `overrideTransitionName` | 按 `resolveStackPageTransitionName` 派生 |
 
 压栈：`slide-right` + from 子页 → `addCachedRouteName(from.name)`；+ from AppShell → 延迟隐藏 MainTabLayer。
 
@@ -354,6 +388,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 ## Anti-patterns
 
+- 内外层 `<transition>` 共用同一 `routeTransitionName` → AppShell 边界双重 slide 或回主页内容硬切
 - 用 `/home`、`/me` 路由驱动 Tab 切换 → Tab 状态丢失、转场错乱
 - Tab 页与子页共用同一路由 name
 - `include` 与组件 `name` 不一致导致缓存失效
@@ -392,21 +427,25 @@ Vue3 中异步路由组件需通过 slot 取出再包 transition + keep-alive：
 
 ```vue
 <!-- StackOverlayLayer — Vue3 / Vue Router 4 -->
-<router-view v-slot="{ Component, route }">
-  <transition :name="routeTransitionName">
-    <keep-alive :include="cachedRouteNames">
-      <component
-        :is="Component"
-        v-if="Component"
-        :key="route.fullPath"
-        class="stack-page"
-      />
-    </keep-alive>
-  </transition>
-</router-view>
+<transition :name="routeTransitionName">
+  <div v-show="isStackOverlayVisible" class="stack-overlay-layer">
+    <router-view v-slot="{ Component, route }">
+      <transition :name="stackPageTransitionName">
+        <keep-alive :include="cachedRouteNames">
+          <component
+            :is="Component"
+            v-if="Component"
+            :key="route.name ?? route.path"
+            class="stack-page"
+          />
+        </keep-alive>
+      </transition>
+    </router-view>
+  </div>
+</transition>
 ```
 
-双层 `<transition>`（hiking App.vue 中外层包 `v-show` 的 div、内层包 `router-view`）在 Vue3 可保留，但**内层**必须采用上述 `v-slot` 写法；外层仅对叠层容器做进出场时可保留。
+双层 `<transition>` 在 Vue3 保留：**外层** `routeTransitionName` 管叠层容器；**内层** `stackPageTransitionName` 管栈内路由切换（与 AppShell 交界时为空或 `fade`，见 [双层 transition 分工](#双层-transition-分工)）。内层必须 `v-slot` + `<component :is>` + `:key`。
 
 **2. Vue Router 4 导航守卫**
 
@@ -418,8 +457,10 @@ router.beforeEach(async (to, from) => {
     const ok = await confirmLogin()
     return ok ? { path: '/login' } : false  // false = 取消导航
   }
-  const routeTransitionName = resolveTransition(to, from) // 逻辑同 Vue2
+  const routeTransitionName = resolveTransition(to, from)
+  const stackPageTransitionName = resolveStackPageTransitionName(routeTransitionName, to, from)
   navigationStore.setRouteTransition(routeTransitionName)
+  navigationStore.setStackPageTransitionName(stackPageTransitionName)
   applyMainTabLayerVisibility(routeTransitionName, to, from)
   return true
 })
@@ -452,10 +493,11 @@ defineOptions({ name: 'OrderList' })
 | 项目 | Vue2 | Vue3 |
 |------|------|------|
 | 叠层 router-view | `<keep-alive><router-view/></keep-alive>` | `v-slot` + `<component :is>` + `:key` |
+| 双层 transition | 外 `routeTransitionName` / 内 `stackPageTransitionName` | 相同 |
 | 守卫 | `next()` | `return true / false / route` |
 | 状态 | Vuex 3 | Pinia 或 Vuex 4 |
 | 返回动画 | `setOverrideTransition('slide-left')` | 相同 |
-| 回到主页动画名 | `slide-left` | 相同 |
+| 回到主页 | 外 `slide-left` + 内 `fade` | 相同 |
 
 ## Vue → React quick map
 
@@ -465,7 +507,7 @@ defineOptions({ name: 'OrderList' })
 | `router-view` / `v-slot` in overlay | `<Routes>` in overlay `div` |
 | `keep-alive :include` | cache Map / `react-activation` |
 | `router.beforeEach` | `ProtectedRoute` + layout `useEffect` |
-| Vuex/Pinia `routeTransitionName` | Context / Zustand |
+| Vuex/Pinia `routeTransitionName` + `stackPageTransitionName` | Context / Zustand |
 | `<transition :name>` | `framer-motion` / `react-transition-group` |
 | `meta.requiresLogin` | route handle `requiresAuth` 或 wrapper |
 | 回到主页 `slide-left` | 同上命名，exit 动画向右滑出 |
