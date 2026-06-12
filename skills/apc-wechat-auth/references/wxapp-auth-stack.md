@@ -118,7 +118,7 @@ const { appkey, appsecret, baseUrl } = getApp().globalData
 const apiBase = baseUrl + '/wxapp'  // 所有业务请求前缀
 ```
 
-appkey/appsecret 与 `admin:authorize Wxapp` 生成的记录一致。
+appkey/appsecret 与 `php artisan admin:authorize Wxapp` 生成的记录一致（命令定义在 `api/routes/console.php`，**默认注释关闭**，启用方法见 [device-authorize.md §生成客户端凭证](device-authorize.md)）。
 
 ### 5.2 Layer1：auth_code 生命周期
 

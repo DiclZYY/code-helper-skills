@@ -24,14 +24,62 @@ ServiceFactory::authorize()->createAuthToken($appkey);     // 换 auth_code
 ServiceFactory::authorize()->checkAuthToken();             // 中间件调用
 ```
 
-### 生成客户端凭证
+### 生成客户端凭证 — `admin:authorize` Artisan 命令
 
-`routes/console.php` 中启用 Artisan 命令后：
+APC 项目在 **`api/routes/console.php` 末尾** 预置了该命令，**默认整段注释关闭**（避免生产环境误生成凭证）。使用前须手动启用。
+
+#### 启用步骤
+
+1. 打开 `api/routes/console.php`，找到 `// 使用时开启` 注释块
+2. **取消块注释**（去掉首尾 `/*` / `*/`）
+3. **删除或注释掉** 命令体内的占位守卫（否则命令会直接退出）：
+
+```php
+$this->error('未开启');
+exit;
+```
+
+4. 保留并运行的逻辑如下（与 commit 54fcf8be 一致）：
+
+```php
+// api/routes/console.php — 使用时开启
+Artisan::command('admin:authorize {module} {remark?}', function ($module, $remark = null) {
+    $data = \App\Repositories\ServiceFactory::authorize()->generate($module, $remark);
+    $this->info('授权信息已生成，请自行保存');
+
+    foreach ($data as $key => $value) {
+        $this->info($key . ': ' . $value);
+    }
+});
+```
+
+> **安全**：`generate()` 返回的 **`appsecret` 明文仅此一次输出**；入库字段为 `bcrypt` 哈希，无法再次从 DB 读出。生成后立刻写入客户端配置或密钥管理，勿提交到 Git。
+
+#### 用法
+
+在项目 `api/` 目录下：
 
 ```bash
+php artisan admin:authorize Wxapp "宁海 OA 小程序"
 php artisan admin:authorize MobileApp "Cordova H5"
-# 输出 appkey、appsecret（明文仅此次显示，DB 存 bcrypt）
 ```
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `module` | 是 | 写入 `authorize.module`，须与 `current_module()` 一致（如 `Wxapp`） |
+| `remark` | 否 | 备注，便于区分多套客户端 |
+
+#### 输出字段（`AuthorizeRepository::generate`）
+
+| 键 | 说明 |
+|----|------|
+| `type` | 固定 `authorization_code` |
+| `appkey` | 15 位随机字符串，唯一 |
+| `appsecret` | **明文秘钥**（同时写入 DB 的 bcrypt 哈希） |
+| `module` | 与命令参数相同 |
+| `remark` | 与命令参数相同（可空） |
+
+客户端 `globalData` / 环境配置中的 **appkey、appsecret** 须与此处输出一致；小程序示例见 [wxapp-auth-stack.md §5.1](wxapp-auth-stack.md)。
 
 `module` 参数须与目标路由控制器 namespace 首段一致（见 §4）。
 
