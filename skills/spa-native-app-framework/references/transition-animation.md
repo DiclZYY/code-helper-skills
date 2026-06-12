@@ -230,3 +230,133 @@ Vue 2 项目可将 `fade-enter-from` 写作 `.fade-enter`。也可用于与 slid
 - 双层：外层 AnimatePresence + `routeTransitionName` 控制 stack 显隐 slide；内层 + `stackPageTransitionName` 控制 route 切换（AppShell 边界：内层 none / fade）
 - 每个 stack 页面根：`position: absolute; inset: 0`
 - `framer-motion` 并行 exit/enter 模拟 slide-left/right；回主页内层用 opacity variant
+
+## 8. 进入后立即聚焦 input 导致的页面抖动（实战经验）
+
+### 现象
+
+栈子页 A→B 压栈时（B 是搜索/输入类页面，习惯在 `onMounted` 或 `nextTick` 中 `inputRef.focus()`）：
+
+- 外层 slide-right 动画 0.5s 进行中，新页从 `translate3d(100%, 0, 0)` 滑入
+- `focus()` 在压栈动画 **第一帧** 就触发，移动端键盘随即弹出
+- 键盘弹出引发**视口 reflow + input 元素 scrollIntoView**，新页 DOM 重排
+- 重排与外层 `transform: translate3d` 动画叠加 → 视觉上呈现「页面瞬间出现 + 抖动」
+
+开发者在桌面调试时**不易察觉**（无键盘、动画流畅），但移动端必现。
+
+### 根因
+
+转场 class 上 `position: absolute !important`（[§2.1](#21-推荐更通用在转场-class-上设-absolute)）和 `transform: translate3d` 只在动画期有效；这期间任何会改变**文档流 / 视口尺寸**的操作（键盘、滚动到位、固定元素位移）都会让外层 `transform` 看起来失效或错位。
+
+| 触发动作 | 是否会引发布局变化 | 是否与 slide 叠加抖动 |
+|---------|------------------|----------------------|
+| `input.focus()`（移动端） | ✓（弹键盘、scrollIntoView） | ✓ |
+| `textarea.focus()` | ✓ | ✓ |
+| `select` 唤起下拉 | ✓ | 弱 |
+| 同步 setState 修改 height/width | ✓ | ✓ |
+| 修改 v-show 状态 | ✓ | 弱 |
+| 同步 API 请求（无副作用） | ✗ | ✗ |
+| 滚动到指定位置 | ✓ | ✓ |
+
+### 解决方案
+
+**核心：动画期间只做"无副作用的事"，聚焦 / 滚动 / 弹窗全部延后到动画结束后。**
+
+#### 方案 A（推荐）：延迟到动画结束（500ms）后
+
+```vue
+<script setup>
+import { ref, onMounted } from 'vue'
+
+const inputRef = ref(null)
+
+onMounted(() => {
+  // slide 转场 0.5s；延时聚焦避开 reflow 与 transform 叠加
+  setTimeout(() => {
+    inputRef.value?.focus()
+  }, 520)
+})
+</script>
+```
+
+**适用场景**：搜索页、表单填写页等「进入即输入」页面。
+
+**优点**：实现最简单，对原有代码侵入最小。
+**代价**：用户感知上「进入 → 0.5s 后光标才出现」，但 slide 动画本身已建立视觉过渡，对 UX 无负面。
+
+#### 方案 B：监听 transitionend
+
+```js
+onMounted(() => {
+  const body = document.querySelector('.stack-overlay-layer')
+  if (!body) {
+    inputRef.value?.focus()
+    return
+  }
+  const handler = (e) => {
+    if (e.target === body && e.propertyName === 'transform') {
+      body.removeEventListener('transitionend', handler)
+      inputRef.value?.focus()
+    }
+  }
+  body.addEventListener('transitionend', handler)
+})
+```
+
+**适用场景**：动画时长可能变化（自定义转场），需要更精确同步。
+**代价**：代码更复杂；要处理 `transitionend` 不触发的兜底（`setTimeout` 备用）。
+
+#### 方案 C：改用 keep-alive 的 `onActivated`
+
+```js
+onActivated(() => {
+  // 仅 keep-alive 缓存的页面从缓存恢复时聚焦；首次进入仍走 onMounted
+  inputRef.value?.focus()
+})
+```
+
+**适用场景**：返回时希望自动还原焦点。**不能替代**首次进入的延迟聚焦。
+
+### 反模式（不要这样做）
+
+```js
+// ❌ onMounted + nextTick 立即聚焦 → 移动端必抖
+onMounted(() => {
+  nextTick(() => inputRef.value?.focus())
+})
+
+// ❌ requestAnimationFrame 不够
+onMounted(() => {
+  requestAnimationFrame(() => inputRef.value?.focus())
+})
+
+// ❌ 用 setTimeout(0) 或微任务
+onMounted(() => {
+  Promise.resolve().then(() => inputRef.value?.focus())
+})
+```
+
+以上三种都在动画开始后第一帧触发，无法避开 reflow。
+
+### 检查清单
+
+实现栈子页时，问自己：
+
+- [ ] 该页进入后是否需要 `focus()` 输入框？
+- [ ] 如果需要，**是否已用 `setTimeout(≥500ms)` 延后到 slide 动画结束？**
+- [ ] 该页进入后是否触发 `scrollIntoView`、`window.scrollTo`、键盘弹起的副作用？
+- [ ] 移动端真机 / 浏览器 DevTools 移动模拟验证过：**滑入过程无抖动**？
+
+### 适用本规范的页面类型
+
+| 页面类型 | 是否需要延迟 | 建议方案 |
+|---------|------------|---------|
+| 搜索页 | ✓ | setTimeout 520ms |
+| 表单填写页 | ✓ | setTimeout 520ms |
+| 详情页（无输入） | ✗ | — |
+| 设置/列表页 | ✗ | — |
+| 弹层/Toast | ✗ | — |
+
+### 实际案例
+
+Archive Hub H5「全局搜索页」曾出现：用户从首页点搜索进入，slide 动画进行到约 200ms 时键盘弹出，新页内容**整体抖动一下再继续滑入**。修复：[`search/index.vue`](../../../../www/dev/archive-hub-h5/src/views/search/index.vue) 将 `nextTick + focus()` 改为 `setTimeout(520ms)` 后，slide 动画可完整呈现，输入框在动画结束后才聚焦，移动端再无抖动。
