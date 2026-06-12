@@ -14,14 +14,14 @@
 ### Cursor / Claude（skills CLI）
 
 ```bash
-npx skills add DiclZYY/code-helper --skill spa-native-app-framework
-npx skills add DiclZYY/code-helper --skill apc-wechat-auth
+npx skills add DiclZYY/code-helper-skills --skill spa-native-app-framework
+npx skills add DiclZYY/code-helper-skills --skill apc-wechat-auth
 ```
 
 ### 手动（个人 skills 目录）
 
 ```bash
-git clone git@github.com:DiclZYY/code-helper.git
+git clone git@github.com:DiclZYY/code-helper-skills.git
 # 复制或 symlink 到 ~/.cursor/skills/
 # 例：skills/spa-native-app-framework → ~/.cursor/skills/spa-native-app-framework
 ```
