@@ -7,6 +7,7 @@
 | Skill | 说明 |
 |-------|------|
 | [spa-native-app-framework](skills/spa-native-app-framework/) | Vue2/3 + React：Tab 主壳 + 子页叠层、slide 转场、鉴权路由、keep-alive |
+| [apc-wechat-auth](skills/apc-wechat-auth/) | admin-pro-core：device.authorize 客户端授权 + 可选微信小程序登录栈 |
 
 ## 安装
 
@@ -14,6 +15,7 @@
 
 ```bash
 npx skills add DiclZYY/code-helper --skill spa-native-app-framework
+npx skills add DiclZYY/code-helper --skill apc-wechat-auth
 ```
 
 ### 手动（个人 skills 目录）
