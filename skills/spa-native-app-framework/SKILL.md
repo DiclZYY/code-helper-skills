@@ -442,9 +442,11 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 - 守卫未 `return` 阻断未登录导航
 - 仅在子组件内算转场、壳层无统一 `routeTransitionName`
 - React 中在 Tab 层再套一层 `<Routes>` 导致双 outlet 竞争
+- 移动端 input / textarea `font-size < 16px` → iOS Safari 自动放大视口（见 [transition-animation §10](references/transition-animation.md#10-ios-safari-自动放大聚焦-input-触发视口缩放实战经验)）
 
 ## Optional extensions
 
+- **栈子页 input 字号 ≥ 16px**：iOS Safari 聚焦时若 < 16px 会自动放大视口；搜索/表单页聚焦元素显式覆盖（与 [transition-animation §10](references/transition-animation.md#10-ios-safari-自动放大聚焦-input-触发视口缩放实战经验) 配合）
 - **子页滚动穿透（尤其 iOS）**：叠层必备 `overscroll-behavior: contain`；子页内容区单独 `overflow-y: auto` + 固定高度；iOS 可试 `overscroll-behavior-y: none`、滚动容器全屏 fixed，或边界 `touchmove` 条件 `preventDefault`
 - **重 Tab 懒加载**：首次 `activatedTab === 'Map'` 再赋值 `lazyTabComponents.Map`
 - **右滑返回**：触摸结束后 `setOverrideTransition('slide-left')` + `goBack()`

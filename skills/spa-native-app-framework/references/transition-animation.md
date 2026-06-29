@@ -448,3 +448,143 @@ function onPageBack() {
 - [ ] `clearOverrideStackPageTransition()` 在消费后是否调用（防止污染下一次导航）？
 - [ ] 移动端真机验证：外层 `slide-right` 正常 + 内层独立动画同时进行，无错位
 - [ ] 文档/反例：未将 `setOverrideStackPageTransition` 用于外层（不会生效）
+
+## 10. iOS Safari 自动放大：聚焦 input 触发视口缩放（实战经验）
+
+### 现象
+
+栈子页含搜索/输入框（典型场景：全局搜索页、表单页），用户在 iOS Safari（含微信内置浏览器、部分 iOS WebView）点击输入框时，**整个页面被自动放大**，松开焦点后页面不再自动缩回，导致：
+
+- 后续浏览内容时字号/布局比例与设计稿不一致
+- 与 slide 入场动画叠加时视觉上呈现「放大版页面漂移」，进一步加剧抖动感
+- 桌面调试 **完全不易察觉**（无 iOS 缩放机制）
+
+### 根因
+
+iOS Safari（Mobile Safari）从早期版本起延续的「**输入可访问性**」策略：
+
+> 当用户聚焦 `input` / `textarea` / `contenteditable` 时，若该元素 **computed `font-size` < 16px**，Safari 会临时把视口（layout viewport）缩小，使输入框相对放大到 ~16px 的等效阅读尺寸。
+
+| 元素 computed `font-size` | iOS Safari 表现 |
+|--------------------------|-----------------|
+| ≥ 16px | **不放大** |
+| < 16px（典型 13~15px） | 自动 zoom-in 视口（约 1.15×~1.2×），聚焦期间持续生效 |
+| `font-size: 0` 或无字号 | 同样放大（按默认 16px 推断比较） |
+
+**与本框架的关联：**
+
+- 全局 design token `--text-size-body` 常见取值 `14px`，正好落在触发区间
+- 移动端业务页面常直接继承 body 字号 → 搜索/输入/表单控件全部中招
+- 与 §8「聚焦抖动」并存：前者放大视口，后者抖动；同源于聚焦副作用，但根因与修复点不同
+
+### 解决方案
+
+**核心：聚焦元素（input / textarea / contenteditable）的 `font-size` 强制 ≥ 16px。** 多数场景下只需在样式层覆盖，业务代码不动。
+
+#### 方案 A（推荐）：仅覆盖聚焦元素
+
+```scss
+.search-box__input,
+.form-page__textarea,
+input.form-field,
+textarea.form-field {
+  /* iOS Safari 聚焦时若 < 16px 会自动放大视口；强制 16px 规避 */
+  font-size: 16px;
+}
+```
+
+**适用场景**：搜索框、表单输入、详情页内联备注框等少量聚焦元素。
+
+**优点**：影响范围最小，全局正文 14px 排版不受影响。
+
+#### 方案 B：移动端统一提升聚焦元素最小字号
+
+```scss
+/* 仅 iOS Safari / iOS WebView */
+@supports (-webkit-touch-callout: none) {
+  input,
+  textarea,
+  [contenteditable="true"] {
+    font-size: max(16px, 1rem);
+  }
+}
+```
+
+**适用场景**：项目内搜索/表单页多、全局排版允许输入框略大（17~18px 也可接受）。
+
+**优点**：一次性兜底，新增输入元素无需逐个改样式。
+
+**代价**：所有 input 字号变为 16px+，与 body 14px 形成 2px 视觉差；可通过 `padding` / `height` 调整容器平衡。
+
+#### 方案 C：禁止 user-scaling 并显式控制 viewport
+
+```html
+<meta
+  name="viewport"
+  content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no"
+/>
+```
+
+**⚠️ 不推荐作为独立方案**：
+
+- 苹果审核对无障碍（a11y）要求愈发严格，`user-scalable=no` 可能导致审核驳回
+- iOS 13+ 即便 `maximum-scale=1.0`，Safari 在聚焦时仍可能以某种方式缩放（行为有差异）
+- 该方案**不能替代**前两个方案；可作为防御手段叠加使用
+
+### 反模式（不要这样做）
+
+```scss
+/* ❌ 错误：用 transform: scale 假装放大 —— 仅视觉放大，iOS 仍按原计算字号触发 zoom */
+.search-box__input {
+  font-size: 14px;
+  transform: scale(1.143); /* 14 * 1.143 ≈ 16 */
+}
+```
+
+```scss
+/* ❌ 错误：把 font-size 设到 0、靠 placeholder 显示 —— iOS 仍按默认 16px 比较并放大 */
+.search-box__input {
+  font-size: 0;
+}
+```
+
+```html
+<!-- ❌ 单独使用 maximum-scale 抑制缩放，不解决根因，且影响 a11y -->
+<meta name="viewport" content="maximum-scale=1.0, user-scalable=no" />
+```
+
+### 检查清单
+
+实现带输入控件的栈子页（搜索 / 表单 / 详情备注）时：
+
+- [ ] 该页内是否有 `input` / `textarea` / `contenteditable` 元素？
+- [ ] 这些元素的 computed `font-size` **是否 ≥ 16px**？若 < 16px，**必须在样式层覆盖**
+- [ ] 项目全局 body / `--text-size-body` 是 14px 时，是否对聚焦元素做了**显式提升**？
+- [ ] **移动端真机验证**（必做）：iOS Safari / 微信内置浏览器 / iOS WebView 中点击输入框，**页面未被自动放大**
+- [ ] 同时参考 §8「聚焦抖动」——两者叠加验证：聚焦期间 slide 转场无残余抖动、视口无 zoom
+
+### 适用本规范的页面类型
+
+| 页面类型 | 风险 | 建议 |
+|---------|------|------|
+| 全局搜索页 | 高（首屏即聚焦） | 方案 A：input `font-size: 16px` |
+| 表单填写页 | 高（多 input） | 方案 A：逐个 input 覆盖；或方案 B 全局兜底 |
+| 详情页备注/评论 | 中 | 方案 A：`textarea` 显式 16px |
+| 列表页筛选/筛选 | 中 | 方案 A：单个 input 覆盖即可 |
+| 设置/列表/纯展示页 | 低 | 仍建议方案 B 兜底，防止后续加搜索栏时遗漏 |
+
+### 实际案例
+
+- Archive Hub H5「全局搜索页」曾出现：用户进入搜索页（slide-right 压栈）后点击搜索框，**整个叠层视口被 iOS Safari 自动放大约 1.15×**，松手后页面比例仍放大，与设计稿不一致。根因：`search-box__input` 的 `font-size` 引用全局 `--text-size-body: 14px`，落入 iOS 自动放大区间。修复：[`search/index.vue`](../../../../www/dev/archive-hub-h5/src/views/search/index.vue) 为 `.search-box__input` 显式设 `font-size: 16px`（placeholder 仍保留 14px），同时保留 §8 的 `setTimeout(520ms)` 聚焦延后，两类问题一并解决。
+
+### 与 §8 聚焦抖动的关系
+
+| 维度 | §8 聚焦抖动 | §10 iOS 自动放大 |
+|------|------------|------------------|
+| 触发 | 聚焦期间 reflow（键盘弹出 + scrollIntoView）与 transform 叠加 | 聚焦元素 `font-size < 16px` |
+| 平台 | 所有移动端（H5 / iOS / Android） | **仅 iOS Safari / iOS WebView** |
+| 表现 | 滑入动画期间内容抖动一下 | 整个视口被等比放大 |
+| 修复 | 聚焦延后 ≥ 500ms（动画结束后） | 聚焦元素 `font-size` ≥ 16px |
+| 共存 | ✓ 两个问题**叠加**在搜索/表单页，**必须同时修** | ✓ |
+
+**实战沉淀**：搜索 / 表单类栈子页同时落入两个修复区，**缺一不可**——只延后聚焦会导致视口仍被放大；只放大字号则保留动画期抖动。
