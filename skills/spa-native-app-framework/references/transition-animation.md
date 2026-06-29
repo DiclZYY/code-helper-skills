@@ -154,6 +154,9 @@ Vue 2 会根据 `name` 自动加 `{name}-enter`、`{name}-enter-active`、`{name
 | 压栈 A→B | `slide-right` |
 | 出栈 B→A | `slide-left` |
 | 特殊全屏页退出 | `fade`（可选） |
+| 全屏能力组件入场 | 组件内 `fade-in`（非路由转场） |
+
+> 全屏扫码、拍照、地图选点等能力组件若通过 `Teleport` 覆盖在当前页上，不应占用 `routeTransitionName`。它们应使用组件内部局部 transition，避免污染 Stack 路由语义。详见 [business-callback-target.md](business-callback-target.md)。
 
 ## 4. 守卫如何设定转场名
 
@@ -194,7 +197,7 @@ function resolveStackPageTransitionName(routeTransitionName, to, from, navigatio
 }
 ```
 
-- `goBack()` 必须先 `setOverrideTransition('slide-left')` 再 `router.go(-1)`（影响外层）
+- replace 导航下 `goBack()` 必须先 `setOverrideTransition('slide-left')`，再 `popStackEntry()` + `router.replace(prev ?? '/')`（影响外层）；legacy push/pop 模式才是 `router.go(-1)`
 - `setOverrideStackPageTransition(name)`：仅影响内层，外层 `routeTransitionName` 仍按 `to/from` 计算
 - `slide-right` 且 from 子页 → `addCachedRouteName(from.name)`
 
@@ -202,7 +205,7 @@ function resolveStackPageTransitionName(routeTransitionName, to, from, navigatio
 
 | API | 覆盖范围 | 典型场景 | 写入位置 |
 |-----|----------|----------|----------|
-| `setOverrideTransition(name)` | **外层 + 内层**（内层在非 AppShell 边界时继承外层值） | `goBack` 强制 `slide-left`；扫码全屏页特殊入场 | `goBack` / 业务入口 |
+| `setOverrideTransition(name)` | **外层 + 内层**（内层在非 AppShell 边界时继承外层值） | `goBack` 强制 `slide-left`；旧全屏路由页特殊入场 | `goBack` / 业务入口 |
 | `setOverrideStackPageTransition(name)` | **仅内层**（StackPage），外层按 `to/from` 默认计算 | 「只换子页动画、不动外层容器」——例如：外层默认 `slide-right` 但内层用 `fade-in` | 业务入口 |
 | `setOverrideTransition` 之后再 `setOverrideStackPageTransition` | 外层用前者，内层用后者（**后者优先级更高**） | 外层强制 `slide-left` + 内层独立动画 | `goBack` 后再微调内层 |
 
@@ -416,10 +419,15 @@ function resolveStackPageTransitionName(routeTransitionName, to, from, navigatio
 ### 9.3 使用方式
 
 ```javascript
-// 业务入口：进入扫码页，只让 StackPage 用 fade-in，外层仍是 slide-right
-function onScanClick() {
+// 旧模式：扫码仍作为 StackPage 路由时，只让内层用 fade-in，外层仍是 slide-right
+function onLegacyScanClick() {
   navigationStore.setOverrideStackPageTransition('fade-in')
   openStackPage({ path: '/scan' })
+}
+
+// 新模式：扫码已组件化时，不走路由转场；由 FullScreenScanner 内部 transition 处理
+function onScanClick() {
+  scannerVisible.value = true
 }
 
 // 业务返回：希望外层回到 slide-left（默认行为），内层用自定义淡出
@@ -435,7 +443,8 @@ function onPageBack() {
 | 想要的效果 | 用哪个 API |
 |-----------|-----------|
 | goBack 强制外层 `slide-left` | `setOverrideTransition('slide-left')` |
-| 全屏页特殊入场动画（影响两层） | `setOverrideTransition('fade-in')` |
+| 旧全屏路由页特殊入场动画（影响两层） | `setOverrideTransition('fade-in')` |
+| 已组件化全屏能力入场 | 不用转场 API，组件内局部 `<transition>` |
 | **只改 StackPage，外层保持默认** | `setOverrideStackPageTransition('fade-in')` |
 | 外层强制 + 内层独立 | 先 `setOverrideTransition` 再 `setOverrideStackPageTransition` |
 
@@ -588,3 +597,78 @@ textarea.form-field {
 | 共存 | ✓ 两个问题**叠加**在搜索/表单页，**必须同时修** | ✓ |
 
 **实战沉淀**：搜索 / 表单类栈子页同时落入两个修复区，**缺一不可**——只延后聚焦会导致视口仍被放大；只放大字号则保留动画期抖动。
+
+## 11. 全屏能力组件的入场淡入与即时退出
+
+扫码、拍照、地图选点、选人等全屏能力如果已经组件化（通常 `Teleport to="body"`），它不是 Stack 路由页面，不应通过 `routeTransitionName` 或 `/scan` 中间路由控制动画。
+
+### 推荐语义
+
+| 动作 | 动画 | 原因 |
+|------|------|------|
+| 打开全屏能力组件 | 组件内 `fade-in` | 遮罩 / 摄像头启动更柔和，不影响栈路由语义 |
+| 关闭 / 取消 | 无 leave 动画，立即消失 | file/capture 取消、系统相机收起时需要及时响应 |
+| 成功后跳业务页 / 结果页 | 由调用方决定是否走 Stack 路由转场 | 能力组件只负责结果采集 |
+
+### Vue 模板
+
+```vue
+<Teleport to="body">
+  <transition name="fullscreen-scanner-fade-in">
+    <div v-if="visible" class="fullscreen-scanner">
+      ...
+    </div>
+  </transition>
+</Teleport>
+```
+
+### SCSS
+
+```scss
+.fullscreen-scanner-fade-in-enter-active {
+  transition: opacity 1.6s ease;
+  will-change: opacity;
+}
+
+.fullscreen-scanner-fade-in-enter-from {
+  opacity: 0;
+}
+
+.fullscreen-scanner-fade-in-enter-to,
+.fullscreen-scanner-fade-in-leave-from,
+.fullscreen-scanner-fade-in-leave-to {
+  opacity: 1;
+}
+```
+
+注意：**不要定义 `leave-active`**。这样 `visible=false` 时会立即移除全屏层，不会出现系统相机/文件选择器关闭后黑色扫码层残留的感觉。
+
+### file/capture 取消时机
+
+在移动端 file/capture 模式下，系统拍照组件收起后，H5 页面会重新获得焦点。此时应尽早隐藏全屏能力组件：
+
+```javascript
+const closeScanner = (emitCancel = false) => {
+  emit('update:visible', false)
+  if (emitCancel) emit('cancel')
+  stopFilePickerWatch()
+  stopScan(true)
+}
+```
+
+配合：
+
+- `input type="file"` 的 `cancel` 事件（最快路径）；
+- `window.focus` 兜底；
+- `document.visibilitychange` 兜底；
+- 短延迟（约 80ms）等待 `input.files` 状态稳定。
+
+详见 [business-callback-target.md](business-callback-target.md#35-filecapture-取消及时响应)。
+
+### 检查清单
+
+- [ ] 全屏能力组件是否使用组件内 transition，而不是路由 transition？
+- [ ] 入场是否有 `fade-in`，退出是否无 leave 动画？
+- [ ] 关闭函数是否先 emit 隐藏 / cancel，再清理资源？
+- [ ] file/capture 取消是否能在系统 UI 收起时及时隐藏组件？
+

@@ -1,17 +1,18 @@
 ---
 name: spa-native-app-framework
 description: >-
-  Designs SPA shells mimicking native apps: tab shell + stack overlay, stack
-  transition CSS (slide-left/right per page_animation spec), scroll restore on
-  pop, dynamic keep-alive when pushing A to B. Route guards, auth meta.
-  Vue2/Vue3 and React. Use for mobile-like SPA, list-detail navigation, Cordova/H5.
+  Designs SPA shells mimicking native apps: tab shell + stack overlay, replace
+  navigation with app stackHistory, stack transition CSS (slide-left/right per
+  page_animation spec), scroll restore on pop, dynamic keep-alive when pushing A
+  to B. Route guards, auth meta. Vue2/Vue3 and React. Use for mobile-like SPA,
+  list-detail navigation, Cordova/H5.
 ---
 
 # SPA Native App Framework
 
 框架无关的「Web SPA 模拟原生 App」整体设计。Vue2 为参考实现；**Vue3** 见 [Vue3 兼容性](#vue3-兼容性)；React 见各节的 **React 映射**。
 
-- 通用机制详解：[references/transition-animation.md](references/transition-animation.md)、[references/scroll-restore-and-keepalive.md](references/scroll-restore-and-keepalive.md)
+- 通用机制详解：[references/transition-animation.md](references/transition-animation.md)、[references/replace-navigation.md](references/replace-navigation.md)、[references/scroll-restore-and-keepalive.md](references/scroll-restore-and-keepalive.md)、[references/business-callback-target.md](references/business-callback-target.md)
 - hiking 样例对照：[references/hiking-reference.md](references/hiking-reference.md)
 - 可复制 SCSS：[assets/page-transition.template.scss](assets/page-transition.template.scss)、[assets/stack-page-layout.template.scss](assets/stack-page-layout.template.scss)
 
@@ -21,6 +22,7 @@ description: >-
 
 - 底部 Tab 主页 + Push 子页（详情、表单、设置）
 - 需要 slide 转场、返回保留列表滚动/状态
+- 扫码、拍照、地图选点、选人等全屏能力需要在 H5 SPA 中复用
 - 混合应用（Cordova / Capacitor）全屏壳层
 - 路由表需区分公开页与需登录页
 
@@ -40,9 +42,11 @@ flowchart TB
   mainTabLayer --> tabState["activatedTab 本地状态 非路由"]
   mainTabLayer --> tabBar["TabBar"]
   stackOverlayLayer --> routeOutlet["Router Outlet + Transition"]
+  navApi["openStackPage / goBack / closeStack"] --> appStack["stackHistory + pendingStackPush"]
+  appStack --> replaceNav["router.replace"]
+  replaceNav --> stackOverlayLayer
   navGuard["Navigation Guard"] --> transitionStore["routeTransitionName + stackPageTransitionName"]
   transitionStore --> routeOutlet
-  pushNav["navigate 子路由"] --> stackOverlayLayer
   tabNav["切换 activatedTab"] --> mainTabLayer
 ```
 
@@ -51,7 +55,7 @@ flowchart TB
 | 层 | 职责 | 导航方式 |
 |----|------|----------|
 | **MainTabLayer** | 3~5 个 Tab 根视图常驻 | `activatedTab`，**不**改 URL |
-| **StackOverlayLayer** | 详情/表单等子页 | 路由器 `push` / `pop`，URL 反映子页 |
+| **StackOverlayLayer** | 详情/表单等子页 | **replace 导航**：`openStackPage` / `goBack` + `stackHistory`，URL 反映当前子页但浏览器 history 不增长 |
 
 根路由仅占位：`{ path: '/', name: 'AppShell' }`。子页叠层在 `pathname !== '/'`（或等价条件）时显示。
 
@@ -63,8 +67,16 @@ flowchart TB
 |------|----------|------|
 | 当前激活的 Tab id | `activatedTab` | `selected`, `tab` |
 | 子页叠层是否可见 | `isStackOverlayVisible` | 仅靠隐式路由 |
+| 全屏能力组件显隐 | `scannerVisible` / `pickerVisible` | `/scan` 中间页驱动所有场景 |
+| 业务结果回调目标 | 调用方局部 `handleXSuccess` | 全局 `scanReturnTarget` 承担新业务 |
 | 路由转场 CSS 名（外层叠层） | `routeTransitionName` | `pageTransition` |
 | 栈内 router-view 转场名（内层） | `stackPageTransitionName` | 与外层共用同名 |
+| 应用内栈历史 | `stackHistory` | 浏览器 `history.length` / `router.go(-1)` |
+| 待确认压栈项 | `pendingStackPush` | 导航前直接写入 `stackHistory` |
+| 替换式打开子页 | `openStackPage(to)` | `router.push(to)` |
+| 应用内返回 | `goBack()` | 裸 `router.back()` / `router.go(-1)` |
+| 清空栈回首页 | `closeStack()` | 连续多次浏览器 back |
+| replace 导航滚动位置 | `scrollTops[routeName]` | 仅依赖 `route.meta.scrollTop` |
 | 一次性覆盖转场（外层 + 内层） | `overrideTransitionName` | `firstTransition` |
 | 一次性覆盖转场（**仅内层**） | `overrideStackPageTransitionName` | `innerTransition` |
 | keep-alive 路由名列表 | `cachedRouteNames` | `cachedRoutes` |
@@ -120,7 +132,7 @@ router.beforeEach(async (to, from, next) => {
 
   if (to.meta?.requiresLogin && !isAuthenticated) {
     const goLogin = await confirmLoginDialog() // 项目 UI
-    if (goLogin) router.push({ path: '/login' })
+    if (goLogin) router.replace({ path: '/login' }) // replace 导航：不增长浏览器 history
     return // 阻断导航
   }
 
@@ -292,37 +304,68 @@ const state = {
   overrideTransitionName: null,
   // 仅覆盖内层 stackPageTransitionName；外层 routeTransitionName 仍按 to/from 计算
   overrideStackPageTransitionName: null,
-  cachedRouteNames: [...defaultCachedRouteNames]
+  cachedRouteNames: [...defaultCachedRouteNames],
+  refreshOnBack: false,
+  scrollTops: {},
+  stackHistory: [],
+  pendingStackPush: null,
 }
 // actions: setRouteTransition, setStackPageTransitionName,
 //          setOverrideTransition (use 后 clear), setOverrideStackPageTransition (use 后 clear),
-//          addCachedRouteName, removeCachedRouteName
+//          addCachedRouteName, removeCachedRouteName,
+//          setPendingStackPush, commitPendingStackPush, popStackEntry, resetStack,
+//          setScrollTop, getScrollTop, clearScrollTop
 ```
 
-### 5. 返回与前进 API
+### 5. replace 导航：返回与前进 API
+
+H5 / 微信内置浏览器推荐使用 **replace 导航**：应用内跳转全部 `router.replace()`，返回链由 `stackHistory` 自维护，避免浏览器 history 增长导致微信底部前进/后退栏出现。
 
 ```javascript
-// mixin / composable: useStackNavigation
-function goBack(shouldRefreshOnBack = false) {
-  store.dispatch('setOverrideTransition', 'slide-left')
-  if (shouldRefreshOnBack) store.dispatch('setRefreshOnBack', true)
-  router.go(-1)
+const APP_SHELL_PATH = '/'
+
+function snapshotRoute(route) {
+  return { path: route.path, query: { ...route.query }, hash: route.hash }
 }
 
-function openStackPage(path) {
-  router.push(path) // 守卫自动 slide-right
+function openStackPage(to) {
+  navigationStore.setPendingStackPush(snapshotRoute(router.currentRoute.value))
+  router.replace(to)
 }
+
+function goBack(shouldRefreshOnBack = false, autoTransition = true) {
+  if (autoTransition) navigationStore.setOverrideTransition('slide-left')
+  if (shouldRefreshOnBack) navigationStore.setRefreshOnBack(true)
+  const prev = navigationStore.popStackEntry()
+  router.replace(prev ?? { path: APP_SHELL_PATH })
+}
+
+function closeStack(transitionName = 'slide-left') {
+  navigationStore.resetStack()
+  navigationStore.setOverrideTransition(transitionName)
+  router.replace(APP_SHELL_PATH)
+}
+
+router.afterEach((to, from, failure) => {
+  if (failure) {
+    navigationStore.clearPendingStackPush()
+    return
+  }
+  navigationStore.commitPendingStackPush()
+})
 ```
 
-**React：** `useNavigate(-1)` 前 `setOverrideTransition('slide-left')`。
+详解：[references/replace-navigation.md](references/replace-navigation.md)。
+
+**React：** `navigate(to, { replace: true })` + store/context 自维护 `stackHistory`；`goBack()` 时 `popStackEntry()` 后 `navigate(prev ?? '/', { replace: true })`。
 
 ### 6. 转场 CSS
 
 **必须** 引入 [assets/page-transition.template.scss](assets/page-transition.template.scss)（或等效实现），类名/时长/translate 与 [references/transition-animation.md](references/transition-animation.md) 一致。禁止自造 transition 名或改 enter/leave 方向。
 
-## 子栈导航三大机制（通用）
+## 子栈导航核心机制（通用）
 
-子页 A↔B 除壳层与守卫外，框架级能力如下（实现任一 SPA 栈导航时 **三项齐备**）。
+子页 A↔B 除壳层与守卫外，框架级能力如下（实现任一 H5 SPA 栈导航时需整体配套）。
 
 ### 机制一：转场动画（`routeTransitionName` + `stackPageTransitionName` + SCSS）
 
@@ -335,11 +378,21 @@ function openStackPage(path) {
 
 - 守卫写入 store → 壳层 **外层** `:name="routeTransitionName"`、**内层** `:name="stackPageTransitionName"`
 - **内层**栈间切换：并行 enter+leave + 转场 class 上 `position:absolute !important` → 约 0.5s 两页同坐标系横滑
-- 返回务必 `goBack()`：`setOverrideTransition('slide-left')` 再 `router.go(-1)`，否则 B→A 可能误用 `slide-right`
+- 返回务必 `goBack()`：`setOverrideTransition('slide-left')`，replace 导航下再 `popStackEntry()` + `router.replace(prev)`，否则 B→A 可能误用 `slide-right`
 
 详表、keyframes、双页并列原理：[references/transition-animation.md](references/transition-animation.md)
 
-### 机制二：动态 keep-alive（A→B 缓存 A）
+### 机制二：replace 导航（`stackHistory` + `router.replace`）
+
+1. 应用内打开子页：`openStackPage(to)` 先 `setPendingStackPush(currentRoute)`，再 `router.replace(to)`
+2. `router.afterEach` 成功后 `commitPendingStackPush()`，失败时清理 pending
+3. 应用内返回：`goBack()` 弹 `stackHistory`，再 `router.replace(prev ?? '/')`
+4. 关闭整个栈：`closeStack()` 清空 `stackHistory`，replace 回 AppShell
+5. 不使用浏览器 history 作为主返回链，避免微信内置浏览器底部前进/后退栏
+
+详解：[references/replace-navigation.md](references/replace-navigation.md)
+
+### 机制三：动态 keep-alive（A→B 缓存 A）
 
 1. `defaultCachedRouteNames` 初始化 `cachedRouteNames`
 2. 压栈且 `from.name !== 'AppShell'` → `addCachedRouteName(from.name)`
@@ -348,13 +401,25 @@ function openStackPage(path) {
 
 详流程：[references/scroll-restore-and-keepalive.md](references/scroll-restore-and-keepalive.md#1-动态-keep-aliveab-时缓存-a)
 
-### 机制三：滚动位置恢复（B→A）
+### 机制四：滚动位置恢复（B→A）
 
-1. **离开 A**：`beforeRouteLeave` 将 `scrollContainerSelector` 对应元素的 `scrollTop` 写入 `from.meta.scrollTop`（列表页常非默认选择器）
-2. **回到 A**：`activated` 中在 `cachedRouteNames` 含 A 且非刷新时写回 `scrollTop`，然后清零 meta
-3. 与 keep-alive 正交：数据靠实例缓存，滚动靠 meta
+1. **离开 A**：`StackPage` / 页面容器在 `onDeactivated` 保存真实滚动容器 scrollTop
+2. **replace 导航下存储**：写入 store `scrollTops[routeName]`，不要只依赖 `route.meta.scrollTop`
+3. **回到 A**：`onActivated` 中确认 `cachedRouteNames` 含 A 后恢复 scrollTop
+4. **转场兜底**：`nextTick + requestAnimationFrame` 先恢复一次，`setTimeout(520ms)` 在 slide 结束后再兜底一次
+5. **返回刷新**：`goBack(true)` 设置 `refreshOnBack`，恢复逻辑消费后清零并重置滚动
 
 详流程与 mixin 骨架：[references/scroll-restore-and-keepalive.md](references/scroll-restore-and-keepalive.md#2-滚动位置恢复ba)
+
+### 机制五：业务能力组件化（扫码 / 选图 / 选人 / 地图选点）
+
+1. 全屏能力组件通过 `Teleport to="body"` 覆盖当前页面，不占用 Stack 中间路由
+2. 组件只负责采集结果和释放资源，统一 emit `success` / `cancel` / `error`
+3. 调用方决定成功后的行为：当前页处理、回填表单、或进入结果页
+4. 取消时不修改 `stackHistory`，自然停留调用页面
+5. 非安全 HTTP 环境需提供 file/capture 兜底；取消时先 emit 隐藏，再清理资源
+
+详流程与 FullScreenScanner 实战：[references/business-callback-target.md](references/business-callback-target.md)
 
 ### 守卫决策简表
 
@@ -374,7 +439,7 @@ function openStackPage(path) {
 
 | API | 覆盖 | 典型场景 | 反例（请改用） |
 |-----|------|----------|----------------|
-| `setOverrideTransition(name)` | **外层 + 内层** | `goBack` 强制 `slide-left`；扫码全屏页特殊入场 | — |
+| `setOverrideTransition(name)` | **外层 + 内层** | `goBack` 强制 `slide-left`；旧全屏路由页特殊入场 | 组件化全屏能力入场请用组件内 transition |
 | `setOverrideStackPageTransition(name)` | **仅内层**（StackPage） | 只换子页动画，外层容器保持默认 slide 语义 | 想同时改两层时用 `setOverrideTransition` |
 
 **优先级**：若同时设置了 `overrideTransitionName` 与 `overrideStackPageTransitionName`：
@@ -384,16 +449,22 @@ function openStackPage(path) {
 **使用规范**：
 
 ```javascript
-// 场景：goBack 强制外层 slide-left（外层优先于 to/from 计算）
+// 场景：goBack 强制外层 slide-left（replace 导航）
 function goBack() {
   store.dispatch('setOverrideTransition', 'slide-left')
-  router.go(-1)
+  const prev = store.dispatch('popStackEntry')
+  router.replace(prev ?? { path: '/' })
 }
 
-// 场景：进入 /scan 时只让 StackPage 用 fade-in，外层仍是 slide-right
-function onScanClick() {
+// 旧模式：/scan 仍作为 StackPage 路由时，只让内层用 fade-in
+function onLegacyScanClick() {
   store.dispatch('setOverrideStackPageTransition', 'fade-in')
-  router.push('/scan')
+  openStackPage({ path: '/scan' })
+}
+
+// 新模式：扫码已组件化时，不走路由转场
+function onScanClick() {
+  scannerVisible.value = true
 }
 ```
 
@@ -406,7 +477,7 @@ function onScanClick() {
 ## Keep-alive contract（摘要）
 
 1. `include` 项为路由 **name** 字符串；组件 `name` 必须一致
-2. **A→B 压栈** 时动态 `addCachedRouteName(from.name)`（见机制二）
+2. **A→B 压栈** 时动态 `addCachedRouteName(from.name)`（见机制三）
 3. `defaultCachedRouteNames` 不可被 `removeCachedRouteName` 移除
 4. React：`react-activation` 或自管 cache Map
 
@@ -437,16 +508,25 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 - 用 `setOverrideTransition` 试图只改内层 → 会**连带影响**外层（内层在非 AppShell 边界时继承外层值）。只改内层应改用 `setOverrideStackPageTransition`
 - 用 `setOverrideStackPageTransition` 改外层动画 → 不会生效，写错位置
 - 用 `/home`、`/me` 路由驱动 Tab 切换 → Tab 状态丢失、转场错乱
+- 应用内子页导航裸用 `router.push()` → 浏览器 history 增长，微信内置浏览器可能出现底部前进/后退栏
+- 应用内返回裸用 `router.go(-1)` / `router.back()` → 绕过 `stackHistory`，replace 导航语义失效
+- `openStackPage()` 导航前直接写 `stackHistory`，不通过 `pendingStackPush` → 导航失败/重定向后栈污染
+- replace 导航下滚动位置只写 `route.meta.scrollTop` → 路由 meta 复用/替换时机导致恢复不可靠
 - Tab 页与子页共用同一路由 name
 - `include` 与组件 `name` 不一致导致缓存失效
 - 守卫未 `return` 阻断未登录导航
 - 仅在子组件内算转场、壳层无统一 `routeTransitionName`
+- 用 `/scan` 中间路由承载所有扫码业务，导致成功/取消/重新扫码都要修 stackHistory
+- 全屏能力组件关闭时先做耗时清理、后 emit 隐藏 → file/capture 取消后黑屏残留
 - React 中在 Tab 层再套一层 `<Routes>` 导致双 outlet 竞争
 - 移动端 input / textarea `font-size < 16px` → iOS Safari 自动放大视口（见 [transition-animation §10](references/transition-animation.md#10-ios-safari-自动放大聚焦-input-触发视口缩放实战经验)）
 
 ## Optional extensions
 
+- **replace 导航**：H5 / 微信内置浏览器优先 `stackHistory + router.replace`，不要依赖浏览器 history 返回（见 [replace-navigation](references/replace-navigation.md)）
+- **replace 导航滚动恢复**：滚动位置写入 store `scrollTops[routeName]`；`StackPage` 用 `onDeactivated` 保存、`onActivated` 恢复（见 [scroll-restore-and-keepalive](references/scroll-restore-and-keepalive.md)）
 - **栈子页 input 字号 ≥ 16px**：iOS Safari 聚焦时若 < 16px 会自动放大视口；搜索/表单页聚焦元素显式覆盖（与 [transition-animation §10](references/transition-animation.md#10-ios-safari-自动放大聚焦-input-触发视口缩放实战经验) 配合）
+- **全屏能力组件**：扫码/拍照/地图选点优先做成 `Teleport` 组件，入场组件内 `fade-in`、退出无动画；业务成功回调由调用方编排（见 [business-callback-target](references/business-callback-target.md)）
 - **子页滚动穿透（尤其 iOS）**：叠层必备 `overscroll-behavior: contain`；子页内容区单独 `overflow-y: auto` + 固定高度；iOS 可试 `overscroll-behavior-y: none`、滚动容器全屏 fixed，或边界 `touchmove` 条件 `preventDefault`
 - **重 Tab 懒加载**：首次 `activatedTab === 'Map'` 再赋值 `lazyTabComponents.Map`
 - **右滑返回**：触摸结束后 `setOverrideTransition('slide-left')` + `goBack()`
@@ -515,7 +595,7 @@ router.beforeEach(async (to, from) => {
 })
 ```
 
-返回主页时仍设 `slide-left`；`goBack()` 仍先 `setOverrideTransition('slide-left')` 再 `router.back()`。
+返回主页时仍设 `slide-left`；replace 导航下 `goBack()` 先 `setOverrideTransition('slide-left')`，再 `popStackEntry()` + `router.replace(prev ?? '/')`。
 
 **3. `<script setup>` 与 keep-alive `include`**
 
@@ -560,12 +640,15 @@ defineOptions({ name: 'OrderList' })
 | Vuex/Pinia `routeTransitionName` + `stackPageTransitionName` | Context / Zustand |
 | `<transition :name>` | `framer-motion` / `react-transition-group` |
 | `meta.requiresLogin` | route handle `requiresAuth` 或 wrapper |
+| `router.replace` + `stackHistory` | `navigate(to, { replace: true })` + store `stackHistory` |
+| `popStackEntry()` + `router.replace(prev ?? '/')` | `popStackEntry()` + `navigate(prev ?? '/', { replace: true })` |
 | 回到主页 `slide-left` | 同上命名，exit 动画向右滑出 |
 
 ## Additional resources
 
 - [references/transition-animation.md](references/transition-animation.md) — 转场 CSS 规范、双页滑动原理、守卫设定
-- [references/scroll-restore-and-keepalive.md](references/scroll-restore-and-keepalive.md) — 动态 keep-alive、滚动恢复、检查清单
+- [references/replace-navigation.md](references/replace-navigation.md) — replace 导航、stackHistory、goBack/closeStack
+- [references/scroll-restore-and-keepalive.md](references/scroll-restore-and-keepalive.md) — 动态 keep-alive、replace 导航下滚动恢复、检查清单
 - [assets/page-transition.template.scss](assets/page-transition.template.scss) — slide keyframes
 - [assets/stack-page-layout.template.scss](assets/stack-page-layout.template.scss) — 叠层内页面根 absolute 布局
 - [references/hiking-reference.md](references/hiking-reference.md) — hiking 样例、legacy 命名、LineList 案例

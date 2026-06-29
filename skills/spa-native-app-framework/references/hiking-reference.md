@@ -1,4 +1,4 @@
-﻿# Reference: hiking appvue 对照
+# Reference: hiking appvue 对照
 
 本文件为 [SKILL.md](../SKILL.md) 的补充。实现 hiking 或类似项目时查阅。
 
@@ -166,7 +166,7 @@ React 等价：`ProtectedRoute` 或 React Router 6 `loader` 内检查 session。
 
 - 双轨导航、`activatedTab`、`routeTransitionName` / `slide-left` 回主页 / `slide-right` 压栈
 - `beforeEach` 内鉴权、`requiresLogin`、`keep-alive`、动态 `cachedRouteNames`
-- `goBack()` 先 `setOverrideTransition('slide-left')` 再 `router.back()`
+- `goBack()` 先 `setOverrideTransition('slide-left')`；H5 replace 导航项目再 `popStackEntry()` + `router.replace(prev ?? '/')`，hiking legacy push/pop 才用 `router.back()`
 
 ### 破坏性变更（必须改代码，非改设计理念）
 

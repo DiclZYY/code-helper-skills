@@ -2,7 +2,7 @@
 
 子栈 A→B→A 时，除转场外还需 **实例缓存** 与 **滚动位置恢复**。二者正交，需同时实现。
 
-转场 CSS 见 [transition-animation.md](transition-animation.md)。
+转场 CSS 见 [transition-animation.md](transition-animation.md)。replace 导航与应用内栈历史见 [replace-navigation.md](replace-navigation.md)。
 
 ## 1. 动态 keep-alive（A→B 时缓存 A）
 
@@ -67,11 +67,45 @@ if (routeTransitionName === 'slide-right' && from.name && from.name !== 'AppShel
 
 ## 2. 滚动位置恢复（B→A）
 
+### 2.0 replace 导航下的推荐存储
+
+传统 push/pop 导航可把滚动位置写入 `route.meta.scrollTop`。但在 **replace 导航**下，页面历史由应用内 `stackHistory` 维护，`router.replace()` 会不断替换当前 history entry；不同路由实例的 `meta` 复用和时机更容易混淆。
+
+推荐：滚动位置进入 navigation store，由 route name 作为 key。
+
+```javascript
+const state = {
+  scrollTops: {}, // Record<routeName, scrollTop>
+}
+
+function setScrollTop(routeName, scrollTop) {
+  if (routeName) scrollTops[routeName] = scrollTop
+}
+
+function getScrollTop(routeName) {
+  if (!routeName) return null
+  return routeName in scrollTops ? scrollTops[routeName] : null
+}
+
+function clearScrollTop(routeName) {
+  if (routeName) delete scrollTops[routeName]
+}
+```
+
+适用规则：
+
+| 导航模式 | 推荐滚动存储 |
+|----------|--------------|
+| 浏览器 push/pop | `route.meta.scrollTop` 可用 |
+| replace 导航 + `stackHistory` | store `scrollTops[routeName]` 更可靠 |
+
 ### 目标
 
 返回 A 时，列表滚动条回到离开前的位置（与数据保态配合）。
 
 ### 保存：离开 A 时
+
+#### Vue2 / push-pop 模式
 
 在 **组件级** `beforeRouteLeave`（推荐全局 mixin，每个页面可覆盖选择器）：
 
@@ -95,7 +129,41 @@ beforeRouteLeave(to, from, next) {
 
 **为何不用守卫保存？** `beforeRouteLeave` 在 `beforeEach` **之前**执行；守卫里尚不宜仅靠 `cachedRouteNames` 判断是否保存。
 
+#### Vue3 / replace 导航模式
+
+若页面统一使用 `StackPage` 容器，可在容器内保存 `.stack-page__body` 的 scrollTop。注意：`onDeactivated` 时 `route` 可能已经变化，因此需要在激活时缓存当前路由名。
+
+```javascript
+const route = useRoute()
+const navigationStore = useNavigationStore()
+const bodyRef = ref(null)
+const scrollRouteName = ref('')
+
+function saveScrollPosition() {
+  const name = scrollRouteName.value
+  if (bodyRef.value && name) {
+    navigationStore.setScrollTop(name, bodyRef.value.scrollTop)
+  }
+}
+
+onMounted(() => {
+  scrollRouteName.value = route.name || ''
+})
+
+onDeactivated(() => {
+  saveScrollPosition()
+})
+```
+
+关键点：
+
+- 保存用 `scrollRouteName`，不要在 `onDeactivated` 里直接读 `route.name`。
+- 滚动容器应固定，如 `StackPage` 的 `.stack-page__body`。
+- replace 导航下滚动记录进入 store，不写 `route.meta.scrollTop`。
+
 ### 恢复：回到 A 的 `activated`
+
+#### Vue2 / push-pop 模式
 
 keep-alive 页面再次显示时触发 `activated`（不是 `mounted`）。须 **全部** 满足：
 
@@ -122,6 +190,67 @@ activated() {
 
 ### 返回 API
 
+#### replace 导航模式（推荐 H5）
+
+replace 导航下不要 `router.go(-1)`，而是弹应用内 `stackHistory` 后 `router.replace(prev)`：
+
+```javascript
+function goBack(shouldRefreshOnBack = false, autoTransition = true) {
+  if (autoTransition) navigationStore.setOverrideTransition('slide-left')
+  if (shouldRefreshOnBack) navigationStore.setRefreshOnBack(true)
+
+  const prev = navigationStore.popStackEntry()
+  router.replace(prev ?? { path: '/' })
+}
+```
+
+`refreshOnBack` 由 `StackPage` 的恢复逻辑消费：
+
+```javascript
+function restoreScrollPosition() {
+  const name = scrollRouteName.value
+  if (!name) return
+
+  if (refreshOnBack.value) {
+    navigationStore.setRefreshOnBack(false)
+    if (bodyRef.value) bodyRef.value.scrollTop = 0
+    navigationStore.clearScrollTop(name)
+    return
+  }
+
+  const saved = navigationStore.getScrollTop(name)
+  if (saved == null) return
+  if (!cachedRouteNames.value.includes(name)) return
+
+  const apply = () => {
+    if (!bodyRef.value) return
+    bodyRef.value.scrollTop = saved
+    if (Math.abs(bodyRef.value.scrollTop - saved) < 2) {
+      navigationStore.clearScrollTop(name)
+    }
+  }
+
+  nextTick(() => {
+    requestAnimationFrame(apply)
+    setTimeout(apply, 520)
+  })
+}
+
+onActivated(() => {
+  scrollRouteName.value = route.name || ''
+  restoreScrollPosition()
+})
+```
+
+为什么同时 `requestAnimationFrame` 与 `setTimeout(520)`：
+
+| 时机 | 作用 |
+|------|------|
+| `nextTick + requestAnimationFrame` | DOM 恢复后尽快写回滚动 |
+| `setTimeout(520)` | 等 0.5s slide 转场结束后再兜底一次，避免动画/布局期间写入被覆盖 |
+
+#### push-pop 模式
+
 ```javascript
 function goBack(shouldRefresh = false) {
   setOverrideTransition('slide-left') // 与出栈动画一致
@@ -130,15 +259,15 @@ function goBack(shouldRefresh = false) {
 }
 ```
 
-**不要** 裸 `router.go(-1)`，否则可能缺少 `slide-left`，且与守卫自动规则不一致。
+**push-pop 模式不要**裸 `router.go(-1)`，否则可能缺少 `slide-left`，且与守卫自动规则不一致。**replace 导航模式禁止把浏览器 history 当作主返回链**，必须使用 [replace-navigation.md](replace-navigation.md) 中的 `stackHistory`。
 
 ### 与列表业务 mixin 的分工
 
-| 能力 | 机制 |
-|------|------|
-| 列表数据、Tab、分页 | keep-alive 保留组件 `data` |
-| 滚动条位置 | `meta.scrollTop` + `activated` |
-| 下拉刷新数据 | 列表 mixin 的 `pullDownDone` 等，与缓存实例共存 |
+| 能力 | replace 导航机制 | push-pop 兼容机制 |
+|------|------------------|-------------------|
+| 列表数据、Tab、分页 | keep-alive 保留组件 `data` | 同左 |
+| 滚动条位置 | store `scrollTops[routeName]` + `activated` | `meta.scrollTop` + `activated` |
+| 下拉刷新数据 | `refreshOnBack` / 列表 mixin 的 `pullDownDone` 等，与缓存实例共存 | pageBackRefresh / 列表 mixin |
 
 ---
 
@@ -146,11 +275,13 @@ function goBack(shouldRefresh = false) {
 
 ```text
 1. A 显示，用户滚动，scrollTop = 400
-2. push B → guard: slide-right, keepRouteAlive(A)
-3. beforeRouteLeave on A: meta.scrollTop = 400
-4. B 显示；A deactivated 但未 destroy
-5. goBack → override slide-left → guard → A activated
-6. activated: scrollTop 恢复 400；列表 data 仍在
+2. openStackPage(B) → setPendingStackPush(A) → router.replace(B)
+3. afterEach 成功 → commitPendingStackPush(A)
+4. guard: slide-right, keepRouteAlive(A)
+5. A deactivated: store.scrollTops[A] = 400
+6. B 显示；A deactivated 但未 destroy
+7. goBack → override slide-left → popStackEntry 得到 A → router.replace(A)
+8. A activated: 从 store.scrollTops[A] 恢复 400；列表 data 仍在
 ```
 
 ---
@@ -158,11 +289,14 @@ function goBack(shouldRefresh = false) {
 ## 4. Agent 实现检查清单
 
 - [ ] [page-transition.template.scss](../assets/page-transition.template.scss) 已引入
+- [ ] replace 导航项目已实现 `stackHistory` / `pendingStackPush` / `router.replace`
 - [ ] `defaultCachedRouteNames` 与路由/组件 `name` 一致
 - [ ] 压栈时 `addCachedRouteName(from.name)`
-- [ ] 列表页设置正确 `scrollContainerSelector`
-- [ ] 全局 mixin 注册（Vue 2: `Vue.mixin`）
-- [ ] `goBack()` 使用 `slide-left` override
+- [ ] 列表页设置正确 `scrollContainerSelector` 或统一使用 `StackPage` 的滚动容器
+- [ ] replace 导航下滚动位置写入 store `scrollTops[routeName]`，不是只写 `route.meta`
+- [ ] `onDeactivated` 保存滚动时使用激活时缓存的 `scrollRouteName`
+- [ ] `onActivated` 恢复滚动时使用 `requestAnimationFrame` + 转场结束兜底
+- [ ] `goBack()` 使用 `slide-left` override，并在 replace 导航下 `popStackEntry()` 后 `router.replace()`
 
 ## 5. 参考样例（hiking）
 
