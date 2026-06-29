@@ -65,7 +65,8 @@ flowchart TB
 | 子页叠层是否可见 | `isStackOverlayVisible` | 仅靠隐式路由 |
 | 路由转场 CSS 名（外层叠层） | `routeTransitionName` | `pageTransition` |
 | 栈内 router-view 转场名（内层） | `stackPageTransitionName` | 与外层共用同名 |
-| 一次性覆盖转场 | `overrideTransitionName` | `firstTransition` |
+| 一次性覆盖转场（外层 + 内层） | `overrideTransitionName` | `firstTransition` |
+| 一次性覆盖转场（**仅内层**） | `overrideStackPageTransitionName` | `innerTransition` |
 | keep-alive 路由名列表 | `cachedRouteNames` | `cachedRoutes` |
 | 主 Tab 层是否隐藏 | `isMainTabLayerHidden` | `show-sub-page` 类名可保留为 CSS |
 | 懒加载 Tab 组件表 | `lazyTabComponents` | `MapComp` |
@@ -107,7 +108,7 @@ export const routes = [
 守卫顺序建议：
 
 1. **鉴权**：`requiresLogin` 且无 token → 弹窗/跳转登录，`return` 阻断
-2. **转场名**：计算 `routeTransitionName`（外层）与 `stackPageTransitionName`（内层，见 [双层 transition 分工](#双层-transition-分工)）；`overrideTransitionName` 优先且用后清空
+2. **转场名**：计算 `routeTransitionName`（外层）与 `stackPageTransitionName`（内层，见 [双层 transition 分工](#双层-transition-分工)）；`overrideTransitionName` 优先且用后清空；**仅覆盖内层** 用 `overrideStackPageTransitionName`
 3. **叠层 DOM**：前进时延迟隐藏 MainTabLayer；返回 AppShell 时恢复
 4. **动态缓存**：`slide-right` 且 from 非 AppShell → `addCachedRouteName(from.name)`
 5. `next()` / `return true` 前将两个转场名写入全局状态供壳层 `<transition>` 使用
@@ -235,7 +236,12 @@ export default {
 | 任意 | 任意 | `overrideTransitionName` | 按上表规则派生 | `goBack()` 仍先设 `slide-left` |
 
 ```javascript
-function resolveStackPageTransitionName(routeTransitionName, to, from) {
+function resolveStackPageTransitionName(routeTransitionName, to, from, store) {
+  if (store?.state.overrideStackPageTransitionName != null) {
+    const name = store.state.overrideStackPageTransitionName
+    store.commit('CLEAR_OVERRIDE_STACK_PAGE_TRANSITION')
+    return name
+  }
   if (from.name === 'AppShell') return ''
   if (to.name === 'AppShell') return 'fade'
   return routeTransitionName
@@ -284,10 +290,13 @@ const state = {
   routeTransitionName: 'fade',
   stackPageTransitionName: '',
   overrideTransitionName: null,
+  // 仅覆盖内层 stackPageTransitionName；外层 routeTransitionName 仍按 to/from 计算
+  overrideStackPageTransitionName: null,
   cachedRouteNames: [...defaultCachedRouteNames]
 }
-// actions: setRouteTransition, setStackPageTransitionName, setOverrideTransition(clear after use)
-// actions: addCachedRouteName, removeCachedRouteName
+// actions: setRouteTransition, setStackPageTransitionName,
+//          setOverrideTransition (use 后 clear), setOverrideStackPageTransition (use 后 clear),
+//          addCachedRouteName, removeCachedRouteName
 ```
 
 ### 5. 返回与前进 API
@@ -354,9 +363,45 @@ function openStackPage(path) {
 | `AppShell` | 子页 | `slide-right` | `''` |
 | 子页 | 子页 | `slide-right`（压栈默认） | `slide-right` |
 | 子页 | `AppShell` | `slide-left` | `fade` |
-| 任意 | 任意 | `overrideTransitionName` | 按 `resolveStackPageTransitionName` 派生 |
+| 任意 | 任意 | `overrideTransitionName` | 按 `resolveStackPageTransitionName` 派生（**外层值会传染到内层**） |
+| 任意 | 任意 | 按 `to/from` 默认 | `overrideStackPageTransitionName`（**外层不动**） |
 
 压栈：`slide-right` + from 子页 → `addCachedRouteName(from.name)`；+ from AppShell → 延迟隐藏 MainTabLayer。
+
+### 双轨覆盖转场 API
+
+框架提供 **两个独立** 的一次性覆盖转场 API，作用域严格分离：
+
+| API | 覆盖 | 典型场景 | 反例（请改用） |
+|-----|------|----------|----------------|
+| `setOverrideTransition(name)` | **外层 + 内层** | `goBack` 强制 `slide-left`；扫码全屏页特殊入场 | — |
+| `setOverrideStackPageTransition(name)` | **仅内层**（StackPage） | 只换子页动画，外层容器保持默认 slide 语义 | 想同时改两层时用 `setOverrideTransition` |
+
+**优先级**：若同时设置了 `overrideTransitionName` 与 `overrideStackPageTransitionName`：
+- 外层 = `overrideTransitionName`
+- 内层 = `overrideStackPageTransitionName`（**独立内层值优先生效**，不会被外层传染）
+
+**使用规范**：
+
+```javascript
+// 场景：goBack 强制外层 slide-left（外层优先于 to/from 计算）
+function goBack() {
+  store.dispatch('setOverrideTransition', 'slide-left')
+  router.go(-1)
+}
+
+// 场景：进入 /scan 时只让 StackPage 用 fade-in，外层仍是 slide-right
+function onScanClick() {
+  store.dispatch('setOverrideStackPageTransition', 'fade-in')
+  router.push('/scan')
+}
+```
+
+**反模式**：
+
+- 用 `setOverrideTransition` 同时覆盖两层，且内外层方向不同 → 视觉错位
+- 用 `setOverrideStackPageTransition` 改外层动画 → 不会生效，写错位置
+- 在 `setOverrideStackPageTransition` 之后又 `setOverrideTransition`，内层被覆盖为外层传染值 → 想内层独立需在 `setOverrideTransition` **之后**再设
 
 ## Keep-alive contract（摘要）
 
@@ -389,6 +434,8 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 ## Anti-patterns
 
 - 内外层 `<transition>` 共用同一 `routeTransitionName` → AppShell 边界双重 slide 或回主页内容硬切
+- 用 `setOverrideTransition` 试图只改内层 → 会**连带影响**外层（内层在非 AppShell 边界时继承外层值）。只改内层应改用 `setOverrideStackPageTransition`
+- 用 `setOverrideStackPageTransition` 改外层动画 → 不会生效，写错位置
 - 用 `/home`、`/me` 路由驱动 Tab 切换 → Tab 状态丢失、转场错乱
 - Tab 页与子页共用同一路由 name
 - `include` 与组件 `name` 不一致导致缓存失效
@@ -458,7 +505,7 @@ router.beforeEach(async (to, from) => {
     return ok ? { path: '/login' } : false  // false = 取消导航
   }
   const routeTransitionName = resolveTransition(to, from)
-  const stackPageTransitionName = resolveStackPageTransitionName(routeTransitionName, to, from)
+  const stackPageTransitionName = resolveStackPageTransitionName(routeTransitionName, to, from, navigationStore)
   navigationStore.setRouteTransition(routeTransitionName)
   navigationStore.setStackPageTransitionName(stackPageTransitionName)
   applyMainTabLayerVisibility(routeTransitionName, to, from)
@@ -496,7 +543,8 @@ defineOptions({ name: 'OrderList' })
 | 双层 transition | 外 `routeTransitionName` / 内 `stackPageTransitionName` | 相同 |
 | 守卫 | `next()` | `return true / false / route` |
 | 状态 | Vuex 3 | Pinia 或 Vuex 4 |
-| 返回动画 | `setOverrideTransition('slide-left')` | 相同 |
+| `setOverrideStackPageTransition` (内层) | `setOverrideStackPageTransition(name)` | 相同 |
+| `setOverrideTransition` (外层 + 内层) | `setOverrideTransition(name)` | 相同 |
 | 回到主页 | 外 `slide-left` + 内 `fade` | 相同 |
 
 ## Vue → React quick map

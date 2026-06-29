@@ -57,7 +57,8 @@ function resolveStackPageTransitionName(routeTransitionName, to, from) {
 
 - Vue 3：`name` 为 `''` 时不应用命名 transition class（无动画）
 - `fade` 时长 **0.5s**，与 slide 对齐，见 §6
-- `overrideTransitionName` 只影响 **外层** `routeTransitionName`；内层仍按上表派生（`goBack` → 外 `slide-left` + 内 `fade`）
+- `overrideTransitionName`：覆盖 **外层** `routeTransitionName`；内层在非 AppShell 边界时继承该值（`return routeTransitionName`），因此会**连带影响**栈内切换的内层动画
+- `overrideStackPageTransitionName`（§4）：**仅**覆盖内层 `stackPageTransitionName`，外层保持默认 `to/from` 计算；适用于「只改 StackPage 动画、不动容器」的场景
 
 ### 1.3 时序（AppShell → 子页 → 回 AppShell）
 
@@ -177,12 +178,35 @@ if (overrideTransitionName) {
 // beforeEach 末尾
 navigationStore.setRouteTransition(routeTransitionName)
 navigationStore.setStackPageTransitionName(
-  resolveStackPageTransitionName(routeTransitionName, to, from)
+  resolveStackPageTransitionName(routeTransitionName, to, from, navigationStore)
 )
+
+function resolveStackPageTransitionName(routeTransitionName, to, from, navigationStore) {
+  // 一次性覆盖优先级最高：使用后立即清空
+  if (navigationStore.overrideStackPageTransitionName != null) {
+    const name = navigationStore.overrideStackPageTransitionName
+    navigationStore.clearOverrideStackPageTransition()
+    return name
+  }
+  if (from.name === 'AppShell') return ''
+  if (to.name === 'AppShell') return 'fade'
+  return routeTransitionName
+}
 ```
 
-- `goBack()` 必须先 `setOverrideTransition('slide-left')` 再 `router.go(-1)`
+- `goBack()` 必须先 `setOverrideTransition('slide-left')` 再 `router.go(-1)`（影响外层）
+- `setOverrideStackPageTransition(name)`：仅影响内层，外层 `routeTransitionName` 仍按 `to/from` 计算
 - `slide-right` 且 from 子页 → `addCachedRouteName(from.name)`
+
+### 4.1 三种「覆盖转场」API 区分
+
+| API | 覆盖范围 | 典型场景 | 写入位置 |
+|-----|----------|----------|----------|
+| `setOverrideTransition(name)` | **外层 + 内层**（内层在非 AppShell 边界时继承外层值） | `goBack` 强制 `slide-left`；扫码全屏页特殊入场 | `goBack` / 业务入口 |
+| `setOverrideStackPageTransition(name)` | **仅内层**（StackPage），外层按 `to/from` 默认计算 | 「只换子页动画、不动外层容器」——例如：外层默认 `slide-right` 但内层用 `fade-in` | 业务入口 |
+| `setOverrideTransition` 之后再 `setOverrideStackPageTransition` | 外层用前者，内层用后者（**后者优先级更高**） | 外层强制 `slide-left` + 内层独立动画 | `goBack` 后再微调内层 |
+
+> **反模式**：用 `setOverrideTransition` 同时影响两层会导致「内外层同方向叠加 slide」或「回主页时内层 hard cut」——此时应改用 `setOverrideStackPageTransition` 单独控制内层。
 
 ## 5. 为何看到「两个页面并列滑动」（栈内切换）
 
@@ -359,4 +383,68 @@ onMounted(() => {
 
 ### 实际案例
 
-Archive Hub H5「全局搜索页」曾出现：用户从首页点搜索进入，slide 动画进行到约 200ms 时键盘弹出，新页内容**整体抖动一下再继续滑入**。修复：[`search/index.vue`](../../../../www/dev/archive-hub-h5/src/views/search/index.vue) 将 `nextTick + focus()` 改为 `setTimeout(520ms)` 后，slide 动画可完整呈现，输入框在动画结束后才聚焦，移动端再无抖动。
+- Archive Hub H5「全局搜索页」曾出现：用户从首页点搜索进入，slide 动画进行到约 200ms 时键盘弹出，新页内容**整体抖动一下再继续滑入**。修复：[`search/index.vue`](../../../../www/dev/archive-hub-h5/src/views/search/index.vue) 将 `nextTick + focus()` 改为 `setTimeout(520ms)` 后，slide 动画可完整呈现，输入框在动画结束后才聚焦，移动端再无抖动。
+
+## 9. 双轨覆盖转场（外层 / 内层 独立控制）
+
+双层 `<transition>` 各自有独立的状态，但默认下 `routeTransitionName` 会被 `resolveStackPageTransitionName` 在非 AppShell 边界**传染**给 `stackPageTransitionName`。当业务需要「只改 StackPage 动画、不动外层容器」时，引入 **第二个一次性覆盖字段** `overrideStackPageTransitionName`。
+
+### 9.1 状态字段
+
+| 字段 | 作用域 | 用后行为 |
+|------|--------|----------|
+| `overrideTransitionName` | 外层 + 内层（传染） | `clearOverrideTransition()` |
+| `overrideStackPageTransitionName` | **仅内层** | `clearOverrideStackPageTransition()` |
+
+两者相互独立、互不干扰；**同时设置时**，内层值优先生效，外层仍用 `overrideTransitionName`。
+
+### 9.2 守卫计算（Vue3 / Pinia 写法）
+
+```javascript
+function resolveStackPageTransitionName(routeTransitionName, to, from, navigationStore) {
+  if (navigationStore.overrideStackPageTransitionName != null) {
+    const name = navigationStore.overrideStackPageTransitionName
+    navigationStore.clearOverrideStackPageTransition()
+    return name
+  }
+  if (from.name === 'AppShell') return ''
+  if (to.name === 'AppShell') return 'fade'
+  return routeTransitionName
+}
+```
+
+### 9.3 使用方式
+
+```javascript
+// 业务入口：进入扫码页，只让 StackPage 用 fade-in，外层仍是 slide-right
+function onScanClick() {
+  navigationStore.setOverrideStackPageTransition('fade-in')
+  openStackPage({ path: '/scan' })
+}
+
+// 业务返回：希望外层回到 slide-left（默认行为），内层用自定义淡出
+function onPageBack() {
+  navigationStore.setOverrideTransition('slide-left')
+  navigationStore.setOverrideStackPageTransition('fade')
+  goBack()
+}
+```
+
+### 9.4 决策矩阵
+
+| 想要的效果 | 用哪个 API |
+|-----------|-----------|
+| goBack 强制外层 `slide-left` | `setOverrideTransition('slide-left')` |
+| 全屏页特殊入场动画（影响两层） | `setOverrideTransition('fade-in')` |
+| **只改 StackPage，外层保持默认** | `setOverrideStackPageTransition('fade-in')` |
+| 外层强制 + 内层独立 | 先 `setOverrideTransition` 再 `setOverrideStackPageTransition` |
+
+### 检查清单
+
+实现双轨覆盖转场时：
+
+- [ ] 业务是否需要**只**修改内层动画？若否，用 `setOverrideTransition` 即可
+- [ ] `overrideStackPageTransitionName` 在 `beforeEach` 中是否优先于 `to/from` 派生？
+- [ ] `clearOverrideStackPageTransition()` 在消费后是否调用（防止污染下一次导航）？
+- [ ] 移动端真机验证：外层 `slide-right` 正常 + 内层独立动画同时进行，无错位
+- [ ] 文档/反例：未将 `setOverrideStackPageTransition` 用于外层（不会生效）
